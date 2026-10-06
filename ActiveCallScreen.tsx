@@ -15,10 +15,10 @@ import {
   MessageSquare,
   Send,
 } from 'lucide-react';
-import { CallState, IvrStep } from '../types';
-import { phoneAudio } from '../utils/audio';
+import { CallState, IvrStep } from './types';
+import { phoneAudio } from './audio';
 
-import { LiveTranscriptItem } from '../App';
+import { LiveTranscriptItem } from './App';
 
 interface ActiveCallScreenProps {
   number: string;

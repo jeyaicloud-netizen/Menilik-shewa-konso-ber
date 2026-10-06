@@ -1,4 +1,4 @@
-import { ChatMessage } from '../types';
+import { ChatMessage } from './types';
 
 export interface LocalAudioMatch {
   audioUrl: string;
@@ -976,8 +976,11 @@ export async function initLocalBrainAndCache(
         }
 
         if (!response) {
-          const fetched = await fetch(url);
-          if (fetched.ok) {
+          let fetched = await fetch(url).catch(() => null);
+          if ((!fetched || !fetched.ok) && url.startsWith('/audio/')) {
+            fetched = await fetch(url.replace('/audio/', '/')).catch(() => null);
+          }
+          if (fetched && fetched.ok) {
             if (cache) {
               await cache.put(url, fetched.clone()).catch(() => {});
             }

@@ -1,5 +1,5 @@
 import { phoneAudio } from './audio';
-import { ChatMessage } from '../types';
+import { ChatMessage } from './types';
 import { CBE_WELCOME_AUDIO, CBE_GREETING_AUDIO } from './cachedAudio';
 import {
   initLocalBrainAndCache,

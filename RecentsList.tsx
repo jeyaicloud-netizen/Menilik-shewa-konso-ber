@@ -1,6 +1,6 @@
 import React from 'react';
 import { Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed } from 'lucide-react';
-import { CallLog } from '../types';
+import { CallLog } from './types';
 
 interface RecentsListProps {
   logs: CallLog[];

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Phone, User } from 'lucide-react';
-import { Contact } from '../types';
+import { Contact } from './types';
 
 interface ContactsListProps {
   contacts: Contact[];

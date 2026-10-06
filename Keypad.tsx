@@ -1,6 +1,6 @@
 import React from 'react';
 import { Delete, Phone } from 'lucide-react';
-import { phoneAudio } from '../utils/audio';
+import { phoneAudio } from './audio';
 
 interface KeypadProps {
   number: string;

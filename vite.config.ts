@@ -3,24 +3,108 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { defineConfig } from 'vite';
+import fs from 'fs';
+import { defineConfig, Plugin } from 'vite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Custom Vite plugin so flat Root uploads on GitHub + Vercel work with 0 errors
+ * even when mobile browsers flatten src/, components/, utils/, and public/audio/ into the Root (/)!
+ */
+function flatRootSupportPlugin(): Plugin {
+  const extensions = ['', '.ts', '.tsx', '.css', '.js', '.jsx', '.json'];
+
+  const findInRootOrSrc = (baseName: string): string | null => {
+    const candidates = [
+      path.resolve(__dirname, baseName),
+      path.resolve(__dirname, 'src', baseName),
+      path.resolve(__dirname, 'src/components', baseName),
+      path.resolve(__dirname, 'src/utils', baseName),
+    ];
+    for (const cand of candidates) {
+      for (const ext of extensions) {
+        const full = cand + ext;
+        if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+          return full;
+        }
+      }
+    }
+    return null;
+  };
+
+  return {
+    name: 'flat-root-support-plugin',
+    enforce: 'pre',
+    resolveId(source, importer) {
+      // Handle entry point /src/main.tsx or ./main.tsx or /main.tsx
+      if (
+        source === '/src/main.tsx' ||
+        source === './main.tsx' ||
+        source === '/main.tsx' ||
+        source.endsWith('/src/main.tsx')
+      ) {
+        return findInRootOrSrc('main.tsx');
+      }
+
+      // Handle relative imports inside project files
+      if (source.startsWith('.') && importer && !importer.includes('node_modules')) {
+        const importerDir = path.dirname(importer);
+        const directTarget = path.resolve(importerDir, source);
+        for (const ext of extensions) {
+          const full = directTarget + ext;
+          if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+            return full;
+          }
+        }
+        // Fallback: look up by filename at Root or src/
+        const baseName = path.basename(source);
+        const fallback = findInRootOrSrc(baseName);
+        if (fallback) {
+          return fallback;
+        }
+      }
+      return null;
+    },
+    closeBundle() {
+      // Copy all .mp3, .png, .svg, and manifest.json from Root (/) into dist/ and dist/audio/
+      const distDir = path.resolve(__dirname, 'dist');
+      const distAudioDir = path.resolve(distDir, 'audio');
+      if (!fs.existsSync(distDir)) {
+        fs.mkdirSync(distDir, { recursive: true });
+      }
+      if (!fs.existsSync(distAudioDir)) {
+        fs.mkdirSync(distAudioDir, { recursive: true });
+      }
+
+      const rootFiles = fs.readdirSync(__dirname);
+      for (const file of rootFiles) {
+        const srcPath = path.resolve(__dirname, file);
+        if (!fs.statSync(srcPath).isFile()) continue;
+
+        if (file.endsWith('.mp3')) {
+          fs.copyFileSync(srcPath, path.resolve(distDir, file));
+          fs.copyFileSync(srcPath, path.resolve(distAudioDir, file));
+        } else if (
+          file.endsWith('.png') ||
+          file.endsWith('.svg') ||
+          file === 'manifest.json'
+        ) {
+          fs.copyFileSync(srcPath, path.resolve(distDir, file));
+        }
+      }
+    },
+  };
+}
 
 export default defineConfig(() => {
   return {
     plugins: [
+      flatRootSupportPlugin(),
       react(),
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: [
-          'icon.svg',
-          'apple-touch-icon.png',
-          'pwa-192x192.png',
-          'pwa-512x512.png',
-          'pwa-maskable-512x512.png',
-        ],
         manifest: {
           id: '/',
           name: 'Google Phone - CBE 951 AI',
@@ -55,7 +139,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,mp3,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html}'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
         },
         devOptions: {
@@ -70,10 +154,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };

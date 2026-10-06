@@ -9,14 +9,14 @@ import {
   User,
 } from 'lucide-react';
 import { TabType, CallState, IvrStep, CallLog, Contact } from './types';
-import { phoneAudio } from './utils/audio';
-import { CbePhoneManager } from './utils/cbeService';
-import { loadLearnedClasses, LearnedTrainingClass } from './utils/localBrain';
-import { Keypad } from './components/Keypad';
-import { ActiveCallScreen } from './components/ActiveCallScreen';
-import { RecentsList } from './components/RecentsList';
-import { ContactsList } from './components/ContactsList';
-import { PWAInstallButton } from './components/PWAInstallButton';
+import { phoneAudio } from './audio';
+import { CbePhoneManager } from './cbeService';
+import { loadLearnedClasses, LearnedTrainingClass } from './localBrain';
+import { Keypad } from './Keypad';
+import { ActiveCallScreen } from './ActiveCallScreen';
+import { RecentsList } from './RecentsList';
+import { ContactsList } from './ContactsList';
+import { PWAInstallButton } from './PWAInstallButton';
 
 const INITIAL_LOGS: CallLog[] = [
   {

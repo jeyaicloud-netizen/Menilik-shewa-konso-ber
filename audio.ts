@@ -183,7 +183,7 @@ class PhoneAudioEngine {
     });
   }
 
-  // Play direct audio file (MP3 / WAV from /audio/ directory or local memory cache)
+  // Play direct audio file (MP3 / WAV from /audio/ directory, root /, or local memory cache)
   async playAudioFile(url: string): Promise<void> {
     this.stopCurrentAudio();
     return new Promise((resolve) => {
@@ -196,13 +196,28 @@ class PhoneAudioEngine {
           this.currentAudio = null;
           resolve();
         };
-        audio.onerror = (err) => {
+        audio.onerror = () => {
+          // Fallback to root-level MP3 (e.g. /cbe951.mp3) if /audio/cbe951.mp3 wasn't in a subfolder
+          if (localOrRemoteUrl.includes('/audio/')) {
+            const rootUrl = localOrRemoteUrl.replace('/audio/', '/');
+            const fallbackAudio = new Audio(rootUrl);
+            fallbackAudio.volume = this.isSpeakerLoud ? 1.0 : 0.25;
+            this.currentAudio = fallbackAudio;
+            fallbackAudio.onended = () => {
+              this.currentAudio = null;
+              resolve();
+            };
+            fallbackAudio.onerror = () => {
+              this.currentAudio = null;
+              resolve();
+            };
+            fallbackAudio.play().catch(() => resolve());
+            return;
+          }
           this.currentAudio = null;
-          console.warn('Audio playback error for:', url, err);
           resolve();
         };
-        audio.play().catch((err) => {
-          console.warn('Audio play() error:', err);
+        audio.play().catch(() => {
           resolve();
         });
       } catch (err) {
