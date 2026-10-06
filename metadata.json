@@ -1,0 +1,10 @@
+{
+  "name": "CBE Google Phone AI",
+  "description": "የኢትዮጵያ ንግድ ባንክ (951) የደንበኞች አገልግሎት - በGoogle Phone ዲዛይን የተሰራ በአማርኛ የሚሰማና የሚናገር AI",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
