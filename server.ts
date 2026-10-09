@@ -1,6 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 
@@ -619,6 +620,125 @@ app.post('/api/tts', async (req, res) => {
   } catch (error: any) {
     console.error('TTS endpoint error:', error);
     return res.status(500).json({ error: error?.message || 'TTS generation failed' });
+  }
+});
+
+// 4. GitHub Root ZIP Exporter (/api/export-github-zip) — puts all files directly at root of ZIP for Vercel
+function crc32Buffer(buf: Buffer): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function buildZipBuffer(entries: Array<{ name: string; data: Buffer }>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(entry.name.replace(/\\/g, '/'), 'utf8');
+    const dataBuf = entry.data;
+    const crc = crc32Buffer(dataBuf);
+
+    const localHeader = Buffer.alloc(30 + nameBuf.length);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8); // store (0)
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0, 12);
+    localHeader.writeUInt32LE(crc, 14);
+    localHeader.writeUInt32LE(dataBuf.length, 18);
+    localHeader.writeUInt32LE(dataBuf.length, 22);
+    localHeader.writeUInt16LE(nameBuf.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    nameBuf.copy(localHeader, 30);
+
+    localParts.push(localHeader, dataBuf);
+
+    const centralHeader = Buffer.alloc(46 + nameBuf.length);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0, 14);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(dataBuf.length, 20);
+    centralHeader.writeUInt32LE(dataBuf.length, 24);
+    centralHeader.writeUInt16LE(nameBuf.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    nameBuf.copy(centralHeader, 46);
+
+    centralParts.push(centralHeader);
+    offset += localHeader.length + dataBuf.length;
+  }
+
+  const centralDirSize = centralParts.reduce((acc, b) => acc + b.length, 0);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralDirSize, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, ...centralParts, eocd]);
+}
+
+app.get('/api/export-github-zip', (_req, res) => {
+  try {
+    const entries: Array<{ name: string; data: Buffer }> = [];
+    const skipNames = new Set([
+      'node_modules',
+      'dist',
+      '.git',
+      '.env',
+      'bun.lock',
+      'package-lock.json',
+    ]);
+
+    const collectDir = (dirPath: string, relPrefix: string) => {
+      const items = fs.readdirSync(dirPath, { withFileTypes: true });
+      for (const item of items) {
+        if (skipNames.has(item.name)) continue;
+        const fullPath = path.join(dirPath, item.name);
+        const relPath = relPrefix ? `${relPrefix}/${item.name}` : item.name;
+        if (item.isDirectory()) {
+          collectDir(fullPath, relPath);
+        } else if (item.isFile()) {
+          entries.push({
+            name: relPath,
+            data: fs.readFileSync(fullPath),
+          });
+        }
+      }
+    };
+
+    collectDir(__dirname, '');
+    const zipBuf = buildZipBuffer(entries);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="google-phone-951-github-root.zip"'
+    );
+    return res.send(zipBuf);
+  } catch (err: any) {
+    console.error('ZIP export error:', err);
+    return res.status(500).json({ error: 'Failed to generate ZIP' });
   }
 });
 

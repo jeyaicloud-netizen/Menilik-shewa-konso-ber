@@ -734,8 +734,555 @@ export const NAMED_SPEAKER_CLASSES: Array<{ id: string; classNumber: number; nam
   { id: 'class_ahmed', classNumber: 8, name: 'Ahmed' },
 ];
 
+const SELECTED_CLASS_STORAGE_KEY = 'cbe_selected_caller_class_v1';
+const SUPPORT_AGENTS_STORAGE_KEY = 'cbe_support_agents_list_v1';
+const SELECTED_SUPPORT_AGENT_KEY = 'cbe_selected_support_agent_v1';
+const SUPPORT_AUDIO_IDB_NAME = 'cbe_support_agents_idb_v1';
+const SUPPORT_AUDIO_STORE_NAME = 'step_mp3_blobs';
+
+export interface SupportAgentStepDef {
+  stepNumber: number;
+  stepId: string;
+  title: string;
+  defaultAudioKey: string;
+  defaultPrompt: string;
+}
+
+export const SUPPORT_AGENT_STEPS: SupportAgentStepDef[] = [
+  {
+    stepNumber: 1,
+    stepId: 'step_1',
+    title: 'Step 1፦ ሰላምታ (4 ሲነካ የሚመጣው የመጀመሪያ ድምፅ)',
+    defaultAudioKey: 'edris_greeting.mp3',
+    defaultPrompt: 'የኢትዮጵያ ንግድ ባንክ እድሪስ ነኝ ባኳ ምን ልርዳወት',
+  },
+  {
+    stepNumber: 2,
+    stepId: 'step_2',
+    title: 'Step 2፦ ገንዘቡ የተላከለት ሰው አጠገቦት ነው?',
+    defaultAudioKey: 'sew_abrot_nw.mp3',
+    defaultPrompt: 'ገንዘቡ የተላከለት ሰው አጠገቦት ነው ያለው? ገንዘቡ እንዳልደረሰው እንዴት አወቁ?',
+  },
+  {
+    stepNumber: 3,
+    stepId: 'step_3',
+    title: 'Step 3፦ የእርሶን የሂሳብ ቁጥር ይንገሩኝ',
+    defaultAudioKey: 'yerson_account.mp3',
+    defaultPrompt: 'አጠገቦት ናቸው እሽ የእርሶን የሂሳብ ይንገሩኝ',
+  },
+  {
+    stepNumber: 4,
+    stepId: 'step_4',
+    title: 'Step 4፦ ሲቢኢ ብር በደወሉበት ቁጥር ነው?',
+    defaultAudioKey: 'cbebirr_call_number.mp3',
+    defaultPrompt: 'እርሶ ሲቢኢ ብር የሚጠቀሙት አሁን የደወሉበት ነው',
+  },
+  {
+    stepNumber: 5,
+    stepId: 'step_5',
+    title: 'Step 5፦ ስልክ ቁጥሮትን ይንገሩኝ',
+    defaultAudioKey: 'phone_number.mp3',
+    defaultPrompt: 'እሽ ይንገሩኝ ስልክ ቁጥሮትን',
+  },
+  {
+    stepNumber: 6,
+    stepId: 'step_6',
+    title: 'Step 6፦ እሽ (ስልክ ቁጥር ሲነገር #1)',
+    defaultAudioKey: 'eshe_interjection.mp3',
+    defaultPrompt: 'እሽ',
+  },
+  {
+    stepNumber: 7,
+    stepId: 'step_7',
+    title: 'Step 7፦ እሽ (ስልክ ቁጥር ሲነገር #2)',
+    defaultAudioKey: 'eshe_interjection.mp3',
+    defaultPrompt: 'እሽ',
+  },
+  {
+    stepNumber: 8,
+    stepId: 'step_8',
+    title: 'Step 8፦ እሽ (ስልክ ቁጥር ሲነገር #3)',
+    defaultAudioKey: 'eshe_interjection.mp3',
+    defaultPrompt: 'እሽ',
+  },
+  {
+    stepNumber: 9,
+    stepId: 'step_9',
+    title: 'Step 9፦ እሽ (ስልክ ቁጥር ሲነገር #4)',
+    defaultAudioKey: 'eshe_interjection.mp3',
+    defaultPrompt: 'እሽ',
+  },
+  {
+    stepNumber: 10,
+    stepId: 'step_10',
+    title: 'Step 10፦ ስም እስከ አያት ይንገሩኝ',
+    defaultAudioKey: 'full_name.mp3',
+    defaultPrompt: 'ስም እስከ አያት',
+  },
+  {
+    stepNumber: 11,
+    stepId: 'step_11',
+    title: 'Step 11፦ ስንት ብር ላኩ ደንበኛችን?',
+    defaultAudioKey: 'amount_sent.mp3',
+    defaultPrompt: 'ስንት ብር ላኩ ደንበኛችን',
+  },
+  {
+    stepNumber: 12,
+    stepId: 'step_12',
+    title: 'Step 12፦ ለማን ብለው ነበር የላኩት?',
+    defaultAudioKey: 'recipient_name.mp3',
+    defaultPrompt: 'ለማን ብለው ነበር የላኩት',
+  },
+  {
+    stepNumber: 13,
+    stepId: 'step_13',
+    title: 'Step 13፦ የላኩላቸው ደንበኛ አካውንት ቁጥር',
+    defaultAudioKey: 'recipient_account.mp3',
+    defaultPrompt: 'እሽ እርሶ የላኩላቸው ደንበኛ አካዉንት ቁጥር ይንገሩኝ',
+  },
+  {
+    stepNumber: 14,
+    stepId: 'step_14',
+    title: 'Step 14፦ በማጣራት ላይ ነኝ ይጠብቁኝ',
+    defaultAudioKey: 'checking_hold.mp3',
+    defaultPrompt: 'በማጣራት ላይ ነኝ እባኮትን ደንበኛችን አንዴ በመስመር ላይ ይጠብቁኝ',
+  },
+  {
+    stepNumber: 15,
+    stepId: 'step_15',
+    title: 'Step 15፦ ገንዘቡ በትክክል ተልኳል',
+    defaultAudioKey: 'sent_successfully.mp3',
+    defaultPrompt: 'ገንዘቡ በትክክል ተልኳል ደንበኛችን',
+  },
+  {
+    stepNumber: 16,
+    stepId: 'step_16',
+    title: 'Step 16፦ ገንዘቡ ገብቷል',
+    defaultAudioKey: 'money_deposited.mp3',
+    defaultPrompt: 'ገንዘቡ ገብቷል',
+  },
+  {
+    stepNumber: 17,
+    stepId: 'step_17',
+    title: 'Step 17፦ የሲስተም ችግር ነው በ24 ሰዓት',
+    defaultAudioKey: 'system_issue_24h.mp3',
+    defaultPrompt: 'የሲስተም ችግር ነው በ24 ሰዓት ውስጥ ገቢ ይሆናል',
+  },
+  {
+    stepNumber: 18,
+    stepId: 'step_18',
+    title: 'Step 18፦ ስለደወሉ እናመሰግናለን ጥያቄ አለዎት?',
+    defaultAudioKey: 'thank_you_questions.mp3',
+    defaultPrompt: 'ስለደወሉ እናመሰግናለን ደንበኛችን ሌላ ጥያቄ አለወት',
+  },
+  {
+    stepNumber: 19,
+    stepId: 'step_19',
+    title: 'Step 19፦ የአገልግሎት አስተያየት መሙያ (1-5)',
+    defaultAudioKey: 'survey_rating.mp3',
+    defaultPrompt: 'እሽ ስለ አገልግሎት አስተዳደር ቀጣይ ያሉትን መሙያ ይሙሉ ስለደወሉ እናመሰግናለን',
+  },
+  {
+    stepNumber: 20,
+    stepId: 'step_20',
+    title: 'Step 20፦ ተጨማሪ ደረጃ #20',
+    defaultAudioKey: 'survey_rating.mp3',
+    defaultPrompt: 'ተጨማሪ የደንበኞች አገልግሎት መልስ (Step 20)',
+  },
+];
+
+export function getAgentStepDefs(agent?: SupportAgentCharacter | null): SupportAgentStepDef[] {
+  const customCount = Math.max(20, agent?.maxStepsCount || 20);
+  const list: SupportAgentStepDef[] = [...SUPPORT_AGENT_STEPS];
+  for (let i = 21; i <= customCount; i++) {
+    list.push({
+      stepNumber: i,
+      stepId: `step_${i}`,
+      title: `Step ${i}፦ ተጨማሪ ደረጃ #${i}`,
+      defaultAudioKey: 'survey_rating.mp3',
+      defaultPrompt: `የደንበኞች አገልግሎት መልስ (Step ${i})`,
+    });
+  }
+  return list;
+}
+
+export interface SupportAgentCharacter {
+  id: string;
+  name: string;
+  voiceTypeLabel: string;
+  isDefault?: boolean;
+  maxStepsCount?: number;
+  uploadedSteps: Record<string, string>; // stepId -> fileName
+  createdAt: string;
+}
+
+const supportAgentBlobCache = new Map<string, string>(); // key: `${agentId}__${stepId}` -> blobUrl
+const supportAgentRawBlobMap = new Map<string, Blob>(); // key: `${agentId}__${stepId}` -> Blob
+
+function openSupportAudioIdb(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !('indexedDB' in window)) {
+      resolve(null);
+      return;
+    }
+    try {
+      const req = window.indexedDB.open(SUPPORT_AUDIO_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(SUPPORT_AUDIO_STORE_NAME)) {
+          db.createObjectStore(SUPPORT_AUDIO_STORE_NAME);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function preloadSupportAgentsAudio(): Promise<void> {
+  const db = await openSupportAudioIdb();
+  if (!db) return;
+  const agents = loadSupportAgents();
+  for (const agent of agents) {
+    if (agent.isDefault) continue;
+    for (const stepId of Object.keys(agent.uploadedSteps || {})) {
+      const cacheKey = `${agent.id}__${stepId}`;
+      if (supportAgentBlobCache.has(cacheKey)) continue;
+      await new Promise<void>((resolve) => {
+        try {
+          const tx = db.transaction(SUPPORT_AUDIO_STORE_NAME, 'readonly');
+          const store = tx.objectStore(SUPPORT_AUDIO_STORE_NAME);
+          const getReq = store.get(cacheKey);
+          getReq.onsuccess = () => {
+            if (getReq.result instanceof Blob) {
+              supportAgentRawBlobMap.set(cacheKey, getReq.result);
+              supportAgentBlobCache.set(cacheKey, URL.createObjectURL(getReq.result));
+            }
+            resolve();
+          };
+          getReq.onerror = () => resolve();
+        } catch {
+          resolve();
+        }
+      });
+    }
+  }
+}
+
+export async function getSupportAgentStepBlob(
+  agentId: string,
+  stepId: string
+): Promise<Blob | null> {
+  const cacheKey = `${agentId}__${stepId}`;
+  if (supportAgentRawBlobMap.has(cacheKey)) {
+    return supportAgentRawBlobMap.get(cacheKey) || null;
+  }
+  const db = await openSupportAudioIdb();
+  if (!db) return null;
+  return new Promise<Blob | null>((resolve) => {
+    try {
+      const tx = db.transaction(SUPPORT_AUDIO_STORE_NAME, 'readonly');
+      const store = tx.objectStore(SUPPORT_AUDIO_STORE_NAME);
+      const getReq = store.get(cacheKey);
+      getReq.onsuccess = () => {
+        if (getReq.result instanceof Blob) {
+          supportAgentRawBlobMap.set(cacheKey, getReq.result);
+          if (!supportAgentBlobCache.has(cacheKey)) {
+            supportAgentBlobCache.set(cacheKey, URL.createObjectURL(getReq.result));
+          }
+          resolve(getReq.result);
+        } else {
+          resolve(null);
+        }
+      };
+      getReq.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export function getSupportAgentStepPreviewUrl(
+  agentId: string,
+  stepId: string
+): string | null {
+  const cacheKey = `${agentId}__${stepId}`;
+  return supportAgentBlobCache.get(cacheKey) || null;
+}
+
+export function loadSupportAgents(): SupportAgentCharacter[] {
+  const defaultEdris: SupportAgentCharacter = {
+    id: 'support_edris',
+    name: 'እድሪስ (ነባሪ)',
+    voiceTypeLabel: 'ዋና የባንክ ድምፅ (ሁሉም Steps)',
+    isDefault: true,
+    maxStepsCount: 20,
+    uploadedSteps: SUPPORT_AGENT_STEPS.reduce((acc, s) => {
+      acc[s.stepId] = s.defaultAudioKey;
+      return acc;
+    }, {} as Record<string, string>),
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  try {
+    const raw = localStorage.getItem(SUPPORT_AGENTS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const customOnly = (parsed as SupportAgentCharacter[])
+          .filter((a) => a.id !== 'support_edris')
+          .map((a) => ({
+            ...a,
+            maxStepsCount: Math.max(20, a.maxStepsCount || 20),
+            uploadedSteps: a.uploadedSteps || {},
+          }));
+        return [defaultEdris, ...customOnly];
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load support agents:', e);
+  }
+  return [defaultEdris];
+}
+
+export function saveSupportAgentsList(agents: SupportAgentCharacter[]): void {
+  try {
+    localStorage.setItem(SUPPORT_AGENTS_STORAGE_KEY, JSON.stringify(agents));
+  } catch (e) {
+    console.warn('Failed to save support agents:', e);
+  }
+}
+
+export function addSupportAgent(
+  name: string,
+  voiceTypeLabel: string = 'አዲስ የደንበኞች አገልግሎት ድምፅ'
+): SupportAgentCharacter[] {
+  const cleanName = name.trim();
+  if (!cleanName) return loadSupportAgents();
+  const current = loadSupportAgents();
+  const newAgent: SupportAgentCharacter = {
+    id: `support_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    name: cleanName,
+    voiceTypeLabel: voiceTypeLabel.trim() || 'የደንበኞች አገልግሎት',
+    isDefault: false,
+    maxStepsCount: 20,
+    uploadedSteps: {},
+    createdAt: new Date().toISOString(),
+  };
+  const updated = [...current, newAgent];
+  saveSupportAgentsList(updated);
+  return updated;
+}
+
+export function expandSupportAgentSteps(
+  agentId: string,
+  addCount: number = 5
+): SupportAgentCharacter[] {
+  const agents = loadSupportAgents().map((a) => {
+    if (a.id === agentId) {
+      return {
+        ...a,
+        maxStepsCount: Math.max(20, (a.maxStepsCount || 20) + addCount),
+      };
+    }
+    return a;
+  });
+  saveSupportAgentsList(agents);
+  return agents;
+}
+
+export function deleteSupportAgent(agentId: string): SupportAgentCharacter[] {
+  if (agentId === 'support_edris') return loadSupportAgents();
+  const updated = loadSupportAgents().filter((a) => a.id !== agentId);
+  saveSupportAgentsList(updated);
+  return updated;
+}
+
+export async function saveSupportAgentStepAudio(
+  agentId: string,
+  stepId: string,
+  file: File
+): Promise<SupportAgentCharacter[]> {
+  const cacheKey = `${agentId}__${stepId}`;
+  const blobUrl = URL.createObjectURL(file);
+  supportAgentRawBlobMap.set(cacheKey, file);
+  supportAgentBlobCache.set(cacheKey, blobUrl);
+
+  const db = await openSupportAudioIdb();
+  if (db) {
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(SUPPORT_AUDIO_STORE_NAME, 'readwrite');
+        const store = tx.objectStore(SUPPORT_AUDIO_STORE_NAME);
+        store.put(file, cacheKey);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  const stepNum = parseInt(stepId.replace('step_', ''), 10) || 20;
+  const agents = loadSupportAgents().map((a) => {
+    if (a.id === agentId) {
+      return {
+        ...a,
+        maxStepsCount: Math.max(20, a.maxStepsCount || 20, stepNum),
+        uploadedSteps: {
+          ...(a.uploadedSteps || {}),
+          [stepId]: file.name,
+        },
+      };
+    }
+    return a;
+  });
+  saveSupportAgentsList(agents);
+  return agents;
+}
+
 /**
- * Loads all 8 Named Speaker Classes (Jurey, Tariku, Abebe, Abdu, Bereket, Sewbehone, Ramid, Ahmed) from LocalStorage
+ * Deletes a single Step's MP3/Recording so that Step becomes empty (ባዶ)!
+ * Once empty, the user can upload or record a new voice into that empty Step slot.
+ */
+export async function deleteSupportAgentStepAudio(
+  agentId: string,
+  stepId: string
+): Promise<SupportAgentCharacter[]> {
+  const cacheKey = `${agentId}__${stepId}`;
+  supportAgentBlobCache.delete(cacheKey);
+  supportAgentRawBlobMap.delete(cacheKey);
+
+  const db = await openSupportAudioIdb();
+  if (db) {
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(SUPPORT_AUDIO_STORE_NAME, 'readwrite');
+        const store = tx.objectStore(SUPPORT_AUDIO_STORE_NAME);
+        store.delete(cacheKey);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  const agents = loadSupportAgents().map((a) => {
+    if (a.id === agentId) {
+      const nextSteps = { ...(a.uploadedSteps || {}) };
+      delete nextSteps[stepId];
+      return {
+        ...a,
+        uploadedSteps: nextSteps,
+      };
+    }
+    return a;
+  });
+  saveSupportAgentsList(agents);
+  return agents;
+}
+
+/**
+ * Returns the ordered list of populated steps for a custom Support Agent!
+ * - If user only uploaded Step 1, returns [Step 1] (plays 1 and stops).
+ * - If user uploaded 5 steps, returns those 5 steps in order (plays 5 and stops).
+ * - If user uploaded 20 steps, returns all 20 steps in order.
+ */
+export function getPopulatedSupportAgentSteps(
+  agentId: string | null
+): Array<{ stepId: string; stepNumber: number; fileName: string; blobUrl: string; title: string }> {
+  if (!agentId || agentId === 'support_edris') return [];
+  const agents = loadSupportAgents();
+  const agent = agents.find((a) => a.id === agentId);
+  if (!agent || agent.isDefault) return [];
+
+  const defs = getAgentStepDefs(agent);
+  const populated: Array<{
+    stepId: string;
+    stepNumber: number;
+    fileName: string;
+    blobUrl: string;
+    title: string;
+  }> = [];
+
+  for (const def of defs) {
+    const fileName = agent.uploadedSteps?.[def.stepId];
+    if (fileName) {
+      const cacheKey = `${agent.id}__${def.stepId}`;
+      const blobUrl = supportAgentBlobCache.get(cacheKey);
+      if (blobUrl) {
+        populated.push({
+          stepId: def.stepId,
+          stepNumber: def.stepNumber,
+          fileName,
+          blobUrl,
+          title: def.title,
+        });
+      }
+    }
+  }
+  return populated;
+}
+
+/**
+ * Resolves the audio URL for the currently selected Customer Support Agent!
+ */
+export function resolveSupportAgentAudioUrl(
+  selectedSupportAgentId: string | null,
+  defaultAudioUrl: string
+): string {
+  if (!selectedSupportAgentId || selectedSupportAgentId === 'support_edris') {
+    return defaultAudioUrl;
+  }
+
+  const matchedStep = SUPPORT_AGENT_STEPS.find((s) =>
+    defaultAudioUrl.includes(s.defaultAudioKey)
+  );
+  if (!matchedStep) return defaultAudioUrl;
+
+  const cacheKey = `${selectedSupportAgentId}__${matchedStep.stepId}`;
+  const customBlobUrl = supportAgentBlobCache.get(cacheKey);
+  return customBlobUrl || defaultAudioUrl;
+}
+
+export function getSavedSelectedSupportAgentId(): string {
+  try {
+    return localStorage.getItem(SELECTED_SUPPORT_AGENT_KEY) || 'support_edris';
+  } catch {
+    return 'support_edris';
+  }
+}
+
+export function saveSelectedSupportAgentId(agentId: string): void {
+  try {
+    localStorage.setItem(SELECTED_SUPPORT_AGENT_KEY, agentId);
+  } catch {
+    // ignore
+  }
+}
+
+export function getSavedSelectedClassId(): string {
+  try {
+    return localStorage.getItem(SELECTED_CLASS_STORAGE_KEY) || 'class_jurey';
+  } catch {
+    return 'class_jurey';
+  }
+}
+
+export function saveSelectedClassIdToStorage(classId: string): void {
+  try {
+    localStorage.setItem(SELECTED_CLASS_STORAGE_KEY, classId);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Loads all 8 Named Speaker Classes (Jurey, Tariku, Abebe, Abdu, Bereket, Sewbehone, Ramid, Ahmed)
+ * PLUS any custom Caller Characters added by the user from LocalStorage!
  */
 export function loadLearnedClasses(): LearnedTrainingClass[] {
   let stored: LearnedTrainingClass[] = [];
@@ -776,7 +1323,36 @@ export function loadLearnedClasses(): LearnedTrainingClass[] {
     };
   });
 
-  return merged;
+  // Also include any custom characters added by the user via "+ New Character"
+  const presetIds = new Set(NAMED_SPEAKER_CLASSES.map((p) => p.id));
+  const presetNames = new Set(NAMED_SPEAKER_CLASSES.map((p) => p.name.toLowerCase()));
+  const customClasses = stored.filter(
+    (c) => !presetIds.has(c.id) && !presetNames.has((c.name || '').toLowerCase())
+  );
+
+  return [...merged, ...customClasses];
+}
+
+/**
+ * Adds a new Caller Character Class when the user taps "+ New Character"
+ */
+export function addNewSpeakerClass(name: string): {
+  newClass: LearnedTrainingClass;
+  allClasses: LearnedTrainingClass[];
+} {
+  const all = loadLearnedClasses();
+  const cleanName = name.trim();
+  const newClass: LearnedTrainingClass = {
+    id: `class_custom_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+    classNumber: all.length + 1,
+    name: cleanName,
+    steps: {},
+    turnSequence: [],
+    createdAt: new Date().toISOString(),
+  };
+  const updated = [...all, newClass];
+  saveLearnedClassesList(updated);
+  return { newClass, allClasses: updated };
 }
 
 /**
