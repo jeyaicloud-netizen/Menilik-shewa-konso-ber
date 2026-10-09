@@ -1098,14 +1098,6 @@ export default function App() {
                 }}
               />
             )}
-
-            {showSecretBridgeModal && (
-              <SecretLiveBridgeModal
-                initialTab={secretBridgeModalTab}
-                onClose={() => setShowSecretBridgeModal(false)}
-                onConfigUpdated={(cfg) => setSecretBridgeConfig(cfg)}
-              />
-            )}
           </div>
         ) : (
           /* 3. Normal Google Phone Main Screen (100% Authentic Google Phone) */
@@ -1279,6 +1271,15 @@ export default function App() {
               </button>
             </div>
           </div>
+        )}
+
+        {showSecretBridgeModal && (
+          <SecretLiveBridgeModal
+            config={secretBridgeConfig}
+            initialTab={secretBridgeModalTab}
+            onClose={() => setShowSecretBridgeModal(false)}
+            onConfigUpdated={(cfg) => setSecretBridgeConfig(cfg)}
+          />
         )}
       </div>
     </div>
