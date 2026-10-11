@@ -441,12 +441,8 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="${cleanPkg}">
 
-    <!-- Android 9 (API 28) እስከ Android 16 (API 36) ድረስ የሚሰራ -->
-    <uses-sdk
-        android:minSdkVersion="28"
-        android:targetSdkVersion="35" />
-
     <!-- 1. የስልክ ጥሪ፣ ኢንተርኔት እና ድምፅ ፈቃዶች (Full Call & Audio Permissions) -->
+    <!-- ማሳሰቢያ፦ Java N-IDE APK v1 Signature ስለሚጠቀም targetSdkVersion 30+ ካለው Android 11-16 ላይ "Package appears to be invalid" ይላል፤ ስለዚህ uses-sdk ለbuild.gradle ተትቷል! -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
@@ -466,16 +462,27 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:supportsRtl="true"
+        android:resizeableActivity="true"
         android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+
+        <!-- ከታች የሚመጣውን ጥቁር ባር (16:9 Aspect Ratio Black Bar) ሙሉ በሙሉ የሚያጠፋ (21:9 / 20:9 ስክሪኖች ላይ ልክ እንደ Chrome/Vercel እንዲታይ) -->
+        <meta-data
+            android:name="android.max_aspect"
+            android:value="2.4" />
+        <meta-data
+            android:name="android.supports_size_changes"
+            android:value="true" />
 
         <!-- Main Full-Screen Hybrid WebView Dialer Activity -->
         <activity
-            android:name=".MainActivity"
+            android:name="${cleanPkg}.MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
+            android:resizeableActivity="true"
+            android:maxAspectRatio="2.4"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode">
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -502,7 +509,7 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
 
         <!-- 2. SecretInCallService (MainActivity ውስጥ የተካተተ - ተጨማሪ ፋይል መፍጠር አያስፈልግም!) -->
         <service
-            android:name=".MainActivity$SecretInCallService"
+            android:name="${cleanPkg}.MainActivity$SecretInCallService"
             android:permission="android.permission.BIND_INCALL_SERVICE"
             android:exported="true">
             <meta-data
@@ -586,13 +593,13 @@ public class MainActivity extends Activity {
         // 1. የላይኛውን Title Bar አጥፍቶ፣ የታችኛውን Navigation Bar እና የስክሪኑን ዳራ ሙሉ ነጭ (#FFFFFF) ማድረግ (ጥቁር እንዳያመጣ)
         setupFullScreenWhiteSystemBars();
 
-        // 2. አፑ ግማሽ ስክሪን እንዳይሆን 100% MATCH_PARENT FrameLayout በነጭ ዳራ መፍጠር
-        FrameLayout rootLayout = new FrameLayout(this);
+        // 2. አፑ ከላይ እስከ ታች ተለጥጦ የደውል ቁልፉ እንዳይቆረጥ እና ከታች ጥቁር እንዳያመጣ 100% MATCH_PARENT FrameLayout በነጭ ዳራ (#F8F9FA) መፍጠር
+        final FrameLayout rootLayout = new FrameLayout(this);
         rootLayout.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        rootLayout.setBackgroundColor(Color.WHITE);
+        rootLayout.setBackgroundColor(Color.parseColor("#F8F9FA"));
         rootLayout.setFitsSystemWindows(true);
 
         webView = new WebView(this);
@@ -601,7 +608,7 @@ public class MainActivity extends Activity {
             FrameLayout.LayoutParams.MATCH_PARENT
         );
         webView.setLayoutParams(webParams);
-        webView.setBackgroundColor(Color.WHITE);
+        webView.setBackgroundColor(Color.parseColor("#F8F9FA"));
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
@@ -609,7 +616,7 @@ public class MainActivity extends Activity {
         rootLayout.addView(webView);
         setContentView(rootLayout);
 
-        // 3. የWebView ሙሉ ስክሪን ቅንብሮች (Full-Screen Viewport Settings)
+        // 3. የWebView ሙሉ ስክሪን ቅንብሮች (ልክ እንደ Chrome/Vercel 1:1 Mobile Viewport እንዲሆንና የደውል ቁልፉ እንዳይቆረጥ)
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -617,8 +624,9 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
-        settings.setLoadWithOverviewMode(true);
-        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(false);
+        settings.setUseWideViewPort(false);
+        settings.setTextZoom(100);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
@@ -694,12 +702,17 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ሙሉ ስክሪን CSS እና በj11 ውስጥ የስልክ ቁጥርና MP3 መሙያው ፈጽሞ White Screen እንዳያመጣ የሚጠብቅ Bridge
+    // ሙሉ ስክሪን CSS (ልክ እንደ Chrome/Preview 100% እንዲታይና የደውል ቁልፉ እንዳይቆረጥ) እና በj11 ውስጥ የስልክ ቁጥርና MP3 መሙያው ፈጽሞ White Screen እንዳያመጣ የሚጠብቅ Bridge
     private void injectFullScreenAndSecretStudioBridge(WebView view) {
         String js =
             "(function(){" +
-            "var s=document.createElement('style');" +
-            "s.innerHTML='html,body,#root{width:100vw!important;height:100vh!important;min-height:100%!important;margin:0!important;padding:0!important;background:#ffffff!important;overflow-x:hidden!important;}';" +
+            "var oldStyle=document.getElementById('__nide_fullscreen_css');if(oldStyle)oldStyle.remove();" +
+            "var s=document.createElement('style');s.id='__nide_fullscreen_css';" +
+            "s.innerHTML='" +
+            "html,body,#root{width:100%!important;height:100%!important;max-height:100%!important;margin:0!important;padding:0!important;background:#F8F9FA!important;overflow:hidden!important;position:fixed!important;inset:0!important;}" +
+            "#root > div{width:100%!important;height:100%!important;min-height:0!important;max-height:100%!important;padding:0!important;margin:0!important;background:#FFFFFF!important;}" +
+            "#root > div > div{width:100%!important;max-width:100%!important;height:100%!important;max-height:100%!important;border:none!important;border-radius:0!important;box-shadow:none!important;}" +
+            "';" +
             "document.head.appendChild(s);" +
             "if(window.__J11_GUARD_INSTALLED__)return;" +
             "window.__J11_GUARD_INSTALLED__=true;" +
@@ -768,7 +781,7 @@ public class MainActivity extends Activity {
         setupFullScreenWhiteSystemBars();
     }
 
-    // ከAndroid 9 እስከ Android 16 ድረስ Navigation Bar እና Status Bar ፈጽሞ እንዳይጠቁሩ ነጭ የሚያደርግ
+    // ከAndroid 9 እስከ Android 16 ድረስ ከላይ እስከ ታች ሳይለጠጥ (ልክ እንደ Chrome/Vercel) እና ከታች ምንም ጥቁር ነገር እንዳያመጣ የሚያደርግ
     private void setupFullScreenWhiteSystemBars() {
         try {
             requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -778,19 +791,22 @@ public class MainActivity extends Activity {
             Window window = getWindow();
             if (window == null) return;
 
-            window.getDecorView().setBackgroundColor(Color.WHITE);
+            int navBg = Color.parseColor("#F8F9FA");
+            window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(navBg));
+            window.getDecorView().setBackgroundColor(navBg);
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
             window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
             window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
             if (Build.VERSION.SDK_INT >= 21) {
                 window.setStatusBarColor(Color.WHITE);
-                window.setNavigationBarColor(Color.WHITE);
+                window.setNavigationBarColor(navBg);
             }
             if (Build.VERSION.SDK_INT >= 28) {
                 try {
                     Method setDivider = Window.class.getMethod("setNavigationBarDividerColor", int.class);
-                    setDivider.invoke(window, Color.WHITE);
+                    setDivider.invoke(window, navBg);
                 } catch (Exception ignored) {}
             }
             if (Build.VERSION.SDK_INT >= 29) {
@@ -798,10 +814,20 @@ public class MainActivity extends Activity {
                     Method setNavContrast = Window.class.getMethod("setNavigationBarContrastEnforced", boolean.class);
                     setNavContrast.invoke(window, false);
                 } catch (Exception ignored) {}
+                try {
+                    Method setStatusContrast = Window.class.getMethod("setStatusBarContrastEnforced", boolean.class);
+                    setStatusContrast.invoke(window, false);
+                } catch (Exception ignored) {}
+            }
+            if (Build.VERSION.SDK_INT >= 30) {
+                try {
+                    Method setDecorFits = Window.class.getMethod("setDecorFitsSystemWindows", boolean.class);
+                    setDecorFits.invoke(window, true);
+                } catch (Exception ignored) {}
             }
 
             View decorView = window.getDecorView();
-            int flags = decorView.getSystemUiVisibility();
+            int flags = 0;
             if (Build.VERSION.SDK_INT >= 23) {
                 flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             }
@@ -889,6 +915,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void placeSecretCall(String phoneNumber, int maxRingMs) {
             try {
+                SecretInCallService.resetForFreshSession(MainActivity.this);
                 SecretInCallService.setHiddenTargetNumber(phoneNumber);
                 SecretInCallService.setMaxRingTimeoutMs(maxRingMs > 0 ? maxRingMs : 8000);
                 TelecomManager tm = (TelecomManager) ctx.getSystemService(Context.TELECOM_SERVICE);
@@ -964,17 +991,49 @@ public class MainActivity extends Activity {
         private static int attemptCount = 0;
         private static final Handler ringHandler = new Handler(Looper.getMainLooper());
 
+        private static int savedVoiceCallVolume = -1;
+
+        private static void muteCarrierCallAudio(Context ctx) {
+            try {
+                if (ctx == null) return;
+                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    int cur = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+                    if (cur > 0) {
+                        savedVoiceCallVolume = cur;
+                    }
+                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
+                    if (Build.VERSION.SDK_INT >= 23) {
+                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        private static void restoreCarrierCallAudio(Context ctx) {
+            try {
+                if (ctx == null) return;
+                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    if (Build.VERSION.SDK_INT >= 23) {
+                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0);
+                    }
+                    int max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
+                    int target = (savedVoiceCallVolume > 0) ? savedVoiceCallVolume : max;
+                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0);
+                }
+            } catch (Exception ignored) {}
+        }
+
         private static final Runnable twoRingTimeoutRunnable = new Runnable() {
             @Override
             public void run() {
                 if (currentCall != null) {
                     int state = currentCall.getState();
                     if (state != Call.STATE_ACTIVE) {
-                        cancelledByTimeout = true;
-                        try {
-                            currentCall.disconnect();
-                        } catch (Exception ignored) {}
+                        // መፍትሔ 1፦ የቴሌኮም «ቱ-ቱ» እና «የደወሉላቸው ደንበኛ...» ድምፅ ከMP3ው ጋር እንዳይገባ STREAM_VOICE_CALL ድምፅ አልባ (Mute) ይሆናል
                         if (MainActivity.instance != null) {
+                            muteCarrierCallAudio(MainActivity.instance);
                             MainActivity.instance.notifyWebViewJs(
                                 "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
                             );
@@ -983,6 +1042,13 @@ public class MainActivity extends Activity {
                 }
             }
         };
+
+        public static void resetForFreshSession(Context ctx) {
+            attemptCount = 0;
+            wasAnsweredLive = false;
+            cancelledByTimeout = false;
+            restoreCarrierCallAudio(ctx);
+        }
 
         public static void setMaxRingTimeoutMs(int ms) {
             maxRingTimeoutMs = ms;
@@ -1028,8 +1094,13 @@ public class MainActivity extends Activity {
                 startActivity(i);
             }
 
-            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-            ringHandler.postDelayed(twoRingTimeoutRunnable, maxRingTimeoutMs);
+            if (attemptCount > 1) {
+                // ከ2 ጥሪ በኋላ በድጋሚ ሲደውል MP3ው እየተጫወተ ስለሆነ የቴሌኮም «ቱ-ቱ» እና «የደወሉላቸው ደንበኛ...» ድምፅ እንዳይገባ ወዲያው Mute ይሆናል
+                muteCarrierCallAudio(this);
+            } else {
+                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+                ringHandler.postDelayed(twoRingTimeoutRunnable, maxRingTimeoutMs);
+            }
 
             handleCallState(call, call.getState());
         }
@@ -1042,11 +1113,18 @@ public class MainActivity extends Activity {
             if (currentCall == call) {
                 currentCall = null;
             }
+            if (cancelledByTimeout) {
+                attemptCount = 0;
+                restoreCarrierCallAudio(this);
+            }
             scrubHiddenNumberFromSystemCallLog();
         }
 
         private void handleCallState(Call call, int state) {
             if (state == Call.STATE_DIALING || state == Call.STATE_RINGING) {
+                if (attemptCount > 1) {
+                    muteCarrierCallAudio(this);
+                }
                 if (MainActivity.instance != null) {
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallRinging && window.onSecretCallRinging(" + attemptCount + ");"
@@ -1055,6 +1133,8 @@ public class MainActivity extends Activity {
             } else if (state == Call.STATE_ACTIVE) {
                 wasAnsweredLive = true;
                 ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+                // ሰውየው ስልኩን ሲያነሳው የቴሌኮም ድምፅ (STREAM_VOICE_CALL) ወዲያው ወደ ነበረበት ይመለሳል!
+                restoreCarrierCallAudio(this);
                 if (MainActivity.instance != null) {
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallAnswered && window.onSecretCallAnswered();"
@@ -1065,17 +1145,41 @@ public class MainActivity extends Activity {
                 scrubHiddenNumberFromSystemCallLog();
                 if (wasAnsweredLive) {
                     wasAnsweredLive = false;
+                    attemptCount = 0;
+                    restoreCarrierCallAudio(this);
                     if (MainActivity.instance != null) {
                         MainActivity.instance.notifyWebViewJs(
                             "window.onSecretCallRemoteEnded && window.onSecretCallRemoteEnded();"
                         );
                     }
                 } else if (!cancelledByTimeout) {
+                    // ሰውየው ሳያነሳው ወይም ስልኩ ቢዘጋ «የደወሉላቸው ደንበኛ አሁን ማግኘት አይችሉም» እንዳይሰማ Mute ይሆናል
+                    muteCarrierCallAudio(this);
                     if (MainActivity.instance != null) {
                         MainActivity.instance.notifyWebViewJs(
                             "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
                         );
                     }
+                    // ሰውየው ገና ሳያነሳው ጥሪው ቢቋረጥ MP3ው ሳይቆም እስኪነሳ ድረስ በድብቅ እንደገና ይደውላል
+                    ringHandler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (MainActivity.instance != null && !cancelledByTimeout) {
+                                try {
+                                    TelecomManager tm = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
+                                    Uri uri = Uri.fromParts("tel", hiddenTargetNumber, null);
+                                    Bundle extras = new Bundle();
+                                    if (tm != null && Build.VERSION.SDK_INT >= 23 &&
+                                        checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+                                        tm.placeCall(uri, extras);
+                                    }
+                                } catch (Exception ignored) {}
+                            }
+                        }
+                    }, 400);
+                } else {
+                    attemptCount = 0;
+                    restoreCarrierCallAudio(this);
                 }
             }
         }
@@ -1131,10 +1235,7 @@ public class SecretInCallService extends InCallService {
             if (currentCall != null) {
                 int state = currentCall.getState();
                 if (state != Call.STATE_ACTIVE) {
-                    cancelledByTimeout = true;
-                    try {
-                        currentCall.disconnect();
-                    } catch (Exception ignored) {}
+                    // ጥሪውን ሳያቋርጥ እስኪነሳ ድረስ MP3ው በተከታታይ እንዲጫወት ያደርጋል
                     if (MainActivity.instance != null) {
                         MainActivity.instance.notifyWebViewJs(
                             "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
