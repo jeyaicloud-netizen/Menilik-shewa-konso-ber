@@ -457,21 +457,16 @@ export class CbePhoneManager {
       phoneAudio.startRingback();
     }
 
-    // 2-Ring Timeout (e.g. 8 seconds): Cut BEFORE Ethio Telecom plays "የደወሉለት ደንበኛ..."
-    // and immediately play the "ሁሉም የአገልግሎት ሰጪዎች ደንበኛ በማስተናገድ ላይ ናቸው..." MP3!
+    // After 2 rings (maxRingMs), keep the call ringing until answered (do NOT disconnect)
+    // and loop the "ሁሉም የአገልግሎት ሰጪዎች ደንበኛ በማስተናገድ ላይ ናቸው..." MP3 continuously until answered!
     this.secretRingTimer = setTimeout(() => {
       this.secretRingTimer = null;
       if (!this.isCallActive || this.secretLivePhase !== 'dialing_hidden') return;
-      if (hasNativeBridge) {
-        try {
-          window.AndroidTelecomBridge?.cancelCurrentAttempt?.();
-        } catch {}
-      }
       this.handleSecretNoAnswerAndPlayBusyMp3();
     }, maxRingMs);
   }
 
-  // Called when 2 rings pass without answer -> plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 and silently redials in a loop!
+  // Plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 continuously in a loop while the phone keeps ringing until answered!
   public async handleSecretNoAnswerAndPlayBusyMp3() {
     if (!this.isCallActive || this.secretLivePhase === 'connected_live') return;
     this.clearSecretLiveTimers();
@@ -488,22 +483,16 @@ export class CbePhoneManager {
 
     const busyMp3Url = getSecretBridgeSlotAudioUrl('busy_hold');
     try {
-      await phoneAudio.playAudioFile(busyMp3Url);
+      while (this.isCallActive && this.secretLivePhase === 'playing_busy_mp3') {
+        await phoneAudio.playAudioFile(busyMp3Url);
+        if (!this.isCallActive || this.secretLivePhase !== 'playing_busy_mp3') break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
     } catch (e) {
       console.warn('Busy hold MP3 playback warning:', e);
     } finally {
       this.isAgentSpeaking = false;
       this.events.onAgentSpeakingChange?.(false);
-    }
-
-    // Immediately redial the hidden number again in the background if still on the call!
-    if (this.isCallActive && this.secretLivePhase === 'playing_busy_mp3') {
-      this.secretNextAttemptTimer = setTimeout(() => {
-        this.secretNextAttemptTimer = null;
-        if (this.isCallActive && this.secretLivePhase === 'playing_busy_mp3') {
-          this.startSecretDialAttempt();
-        }
-      }, 350);
     }
   }
 
