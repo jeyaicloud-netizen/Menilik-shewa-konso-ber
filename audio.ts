@@ -33,8 +33,8 @@ class PhoneAudioEngine {
       compressor.release.setValueAtTime(0.15, ctx.currentTime);
 
       const gain = ctx.createGain();
-      // Boost MP3 loudness clearly when speaker is loud so uploaded MP3s never sound quiet
-      gain.gain.setValueAtTime(this.isSpeakerLoud ? 1.85 : 0.45, ctx.currentTime);
+      // Boost MP3 loudness clearly when speaker is loud so uploaded MP3s play loudly and clearly
+      gain.gain.setValueAtTime(this.isSpeakerLoud ? 2.25 : 0.5, ctx.currentTime);
       this.currentMediaGain = gain;
 
       source.connect(compressor);
@@ -182,7 +182,7 @@ class PhoneAudioEngine {
     }
     if (this.currentMediaGain && this.ctx) {
       try {
-        this.currentMediaGain.gain.setValueAtTime(isLoud ? 1.85 : 0.45, this.ctx.currentTime);
+        this.currentMediaGain.gain.setValueAtTime(isLoud ? 2.25 : 0.5, this.ctx.currentTime);
       } catch {}
     }
     if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setSpeakerphone) {

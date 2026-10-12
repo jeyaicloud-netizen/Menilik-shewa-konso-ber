@@ -467,18 +467,11 @@ export class CbePhoneManager {
       } catch (e) {
         console.warn('AndroidTelecomBridge placeSecretCall warning:', e);
       }
-    } else if (cfg.playRingbackDuringDial) {
-      // In Web Preview mode (or when carrier audio isn't active), play subtle phone ringback for the 2 rings
-      phoneAudio.startRingback();
     }
 
-    // After 2 rings (maxRingMs), keep the call ringing until answered (do NOT disconnect)
-    // and loop the "ሁሉም የአገልግሎት ሰጪዎች ደንበኛ በማስተናገድ ላይ ናቸው..." MP3 continuously until answered!
-    this.secretRingTimer = setTimeout(() => {
-      this.secretRingTimer = null;
-      if (!this.isCallActive || this.secretLivePhase !== 'dialing_hidden') return;
-      this.handleSecretNoAnswerAndPlayBusyMp3();
-    }, maxRingMs);
+    // 4 ሲነካ የቴሌኮም «ቱ-ቱ» ወይም «ዲም-ዲም» ድምፅ ሳይገባ ወዲያው የተመረጠው MP3 ብቻ ተጀምሮ እስኪነሳ ድረስ እንዲጫወት ይደረጋል!
+    phoneAudio.stopRingback();
+    this.handleSecretNoAnswerAndPlayBusyMp3();
   }
 
   // Plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 continuously in a loop while the phone keeps ringing until answered!
