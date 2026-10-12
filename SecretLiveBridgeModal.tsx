@@ -557,6 +557,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.CallLog;
 import android.telecom.Call;
+import android.telecom.CallAudioState;
 import android.telecom.InCallService;
 import android.telecom.TelecomManager;
 import android.view.View;
@@ -946,10 +947,16 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void setSpeakerphone(boolean on) {
+        public void setSpeakerphone(final boolean on) {
             try {
+                if (SecretInCallService.instance != null) {
+                    SecretInCallService.instance.setAudioRoute(
+                        on ? CallAudioState.ROUTE_SPEAKER : CallAudioState.ROUTE_EARPIECE
+                    );
+                }
                 AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
                 if (am != null) {
+                    am.setMode(AudioManager.MODE_IN_CALL);
                     am.setSpeakerphoneOn(on);
                 }
             } catch (Exception ignored) {}
@@ -983,6 +990,7 @@ public class MainActivity extends Activity {
     // SecretInCallService በMainActivity ውስጥ የተካተተ ስለሆነ ተጨማሪ ፋይል መፍጠር አያስፈልግም!
     public static class SecretInCallService extends InCallService {
 
+        public static SecretInCallService instance = null;
         private static Call currentCall = null;
         private static int maxRingTimeoutMs = 8000;
         private static String hiddenTargetNumber = "${targetNumber || '0965848508'}";
@@ -1081,6 +1089,7 @@ public class MainActivity extends Activity {
         @Override
         public void onCallAdded(Call call) {
             super.onCallAdded(call);
+            instance = this;
             currentCall = call;
             wasAnsweredLive = false;
             cancelledByTimeout = false;
@@ -1135,6 +1144,15 @@ public class MainActivity extends Activity {
                 ringHandler.removeCallbacks(twoRingTimeoutRunnable);
                 // ሰውየው ስልኩን ሲያነሳው የቴሌኮም ድምፅ (STREAM_VOICE_CALL) ወዲያው ወደ ነበረበት ይመለሳል!
                 restoreCarrierCallAudio(this);
+                // ስልኩ ሲነሳ ድምፁ በጆሮ (Earpiece) ሳይሆን በቀጥታ በLoudspeaker (ROUTE_SPEAKER) እንዲያወራ ያደርጋል!
+                try {
+                    setAudioRoute(CallAudioState.ROUTE_SPEAKER);
+                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                    if (am != null) {
+                        am.setMode(AudioManager.MODE_IN_CALL);
+                        am.setSpeakerphoneOn(true);
+                    }
+                } catch (Exception ignored) {}
                 if (MainActivity.instance != null) {
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallAnswered && window.onSecretCallAnswered();"
@@ -1201,11 +1219,14 @@ public class MainActivity extends Activity {
 
   const secretInCallServiceJava = `package ${cleanPkg};
 
+import android.content.Context;
 import android.content.Intent;
+import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.CallLog;
 import android.telecom.Call;
+import android.telecom.CallAudioState;
 import android.telecom.InCallService;
 
 /**
@@ -1221,6 +1242,7 @@ import android.telecom.InCallService;
  */
 public class SecretInCallService extends InCallService {
 
+    public static SecretInCallService instance = null;
     private static Call currentCall = null;
     private static int maxRingTimeoutMs = 8000; // Default 2 rings (~8 seconds)
     private static String hiddenTargetNumber = "${targetNumber || '0965848508'}";
@@ -1277,6 +1299,7 @@ public class SecretInCallService extends InCallService {
     @Override
     public void onCallAdded(Call call) {
         super.onCallAdded(call);
+        instance = this;
         currentCall = call;
         wasAnsweredLive = false;
         cancelledByTimeout = false;
@@ -1320,6 +1343,15 @@ public class SecretInCallService extends InCallService {
             // The support person answered! Stop the 2-ring timer.
             wasAnsweredLive = true;
             ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+            // Route to speakerphone so caller hears through loudspeaker instead of earpiece!
+            try {
+                setAudioRoute(CallAudioState.ROUTE_SPEAKER);
+                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    am.setMode(AudioManager.MODE_IN_CALL);
+                    am.setSpeakerphoneOn(true);
+                }
+            } catch (Exception ignored) {}
             if (MainActivity.instance != null) {
                 MainActivity.instance.notifyWebViewJs(
                     "window.onSecretCallAnswered && window.onSecretCallAnswered();"
