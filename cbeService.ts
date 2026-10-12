@@ -154,6 +154,11 @@ export class CbePhoneManager {
     if (muted) {
       this.events.onUserSpeakingChange?.(false);
     }
+    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setMicrophoneMute) {
+      try {
+        window.AndroidTelecomBridge.setMicrophoneMute(muted);
+      } catch {}
+    }
   }
 
   setSelectedSupportAgentId(agentId: string) {
@@ -373,6 +378,11 @@ export class CbePhoneManager {
     this.secretLivePhase = 'idle';
     this.secretLiveAttempt = 0;
     this.clearSecretLiveTimers();
+    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setSpeakerphone) {
+      try {
+        window.AndroidTelecomBridge.setSpeakerphone(phoneAudio.getSpeaker());
+      } catch {}
+    }
     this.events.onSecretLivePhaseChange?.('idle', 0);
     this.events.onDraftClassProgressUpdate?.(0);
     this.events.onClassesUpdated?.(loadLearnedClasses(), this.selectedClassId);
@@ -509,6 +519,12 @@ export class CbePhoneManager {
     phoneAudio.stopCurrentAudio();
     this.isAgentSpeaking = false;
     this.events.onAgentSpeakingChange?.(false);
+
+    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setSpeakerphone) {
+      try {
+        window.AndroidTelecomBridge.setSpeakerphone(phoneAudio.getSpeaker());
+      } catch {}
+    }
 
     this.secretLivePhase = 'connected_live';
     this.events.onSecretLivePhaseChange?.('connected_live', this.secretLiveAttempt);

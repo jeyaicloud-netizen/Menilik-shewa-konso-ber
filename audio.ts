@@ -8,6 +8,7 @@ class PhoneAudioEngine {
   private ringGain: GainNode | null = null;
   private ringInterval: any = null;
   private currentAudio: HTMLAudioElement | null = null;
+  private currentMediaGain: GainNode | null = null;
 
   private getContext(): AudioContext {
     if (!this.ctx) {
@@ -18,6 +19,31 @@ class PhoneAudioEngine {
       this.ctx.resume();
     }
     return this.ctx;
+  }
+
+  private attachLoudnessBooster(audio: HTMLAudioElement) {
+    try {
+      const ctx = this.getContext();
+      const source = ctx.createMediaElementSource(audio);
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-18, ctx.currentTime);
+      compressor.knee.setValueAtTime(12, ctx.currentTime);
+      compressor.ratio.setValueAtTime(4, ctx.currentTime);
+      compressor.attack.setValueAtTime(0.003, ctx.currentTime);
+      compressor.release.setValueAtTime(0.15, ctx.currentTime);
+
+      const gain = ctx.createGain();
+      // Boost MP3 loudness clearly when speaker is loud so uploaded MP3s never sound quiet
+      gain.gain.setValueAtTime(this.isSpeakerLoud ? 1.85 : 0.45, ctx.currentTime);
+      this.currentMediaGain = gain;
+
+      source.connect(compressor);
+      compressor.connect(gain);
+      gain.connect(ctx.destination);
+    } catch (e) {
+      // Fallback if MediaElementSource cannot be attached
+      this.currentMediaGain = null;
+    }
   }
 
   // DTMF Frequencies for telephone keypad
@@ -152,7 +178,17 @@ class PhoneAudioEngine {
   setSpeaker(isLoud: boolean) {
     this.isSpeakerLoud = isLoud;
     if (this.currentAudio) {
-      this.currentAudio.volume = isLoud ? 1.0 : 0.25;
+      this.currentAudio.volume = 1.0;
+    }
+    if (this.currentMediaGain && this.ctx) {
+      try {
+        this.currentMediaGain.gain.setValueAtTime(isLoud ? 1.85 : 0.45, this.ctx.currentTime);
+      } catch {}
+    }
+    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setSpeakerphone) {
+      try {
+        window.AndroidTelecomBridge.setSpeakerphone(isLoud);
+      } catch {}
     }
   }
 
@@ -166,14 +202,18 @@ class PhoneAudioEngine {
     return new Promise((resolve, reject) => {
       try {
         const audio = new Audio(`data:audio/wav;base64,${base64Data}`);
-        audio.volume = this.isSpeakerLoud ? 1.0 : 0.25;
+        audio.crossOrigin = 'anonymous';
+        audio.volume = 1.0;
+        this.attachLoudnessBooster(audio);
         this.currentAudio = audio;
         audio.onended = () => {
           this.currentAudio = null;
+          this.currentMediaGain = null;
           resolve();
         };
         audio.onerror = (err) => {
           this.currentAudio = null;
+          this.currentMediaGain = null;
           reject(err);
         };
         audio.play().catch(reject);
@@ -190,10 +230,13 @@ class PhoneAudioEngine {
       try {
         const localOrRemoteUrl = getCachedAudioUrl(url);
         const audio = new Audio(localOrRemoteUrl);
-        audio.volume = this.isSpeakerLoud ? 1.0 : 0.25;
+        audio.crossOrigin = 'anonymous';
+        audio.volume = 1.0;
+        this.attachLoudnessBooster(audio);
         this.currentAudio = audio;
         audio.onended = () => {
           this.currentAudio = null;
+          this.currentMediaGain = null;
           resolve();
         };
         audio.onerror = () => {
@@ -201,20 +244,25 @@ class PhoneAudioEngine {
           if (localOrRemoteUrl.includes('/audio/')) {
             const rootUrl = localOrRemoteUrl.replace('/audio/', '/');
             const fallbackAudio = new Audio(rootUrl);
-            fallbackAudio.volume = this.isSpeakerLoud ? 1.0 : 0.25;
+            fallbackAudio.crossOrigin = 'anonymous';
+            fallbackAudio.volume = 1.0;
+            this.attachLoudnessBooster(fallbackAudio);
             this.currentAudio = fallbackAudio;
             fallbackAudio.onended = () => {
               this.currentAudio = null;
+              this.currentMediaGain = null;
               resolve();
             };
             fallbackAudio.onerror = () => {
               this.currentAudio = null;
+              this.currentMediaGain = null;
               resolve();
             };
             fallbackAudio.play().catch(() => resolve());
             return;
           }
           this.currentAudio = null;
+          this.currentMediaGain = null;
           resolve();
         };
         audio.play().catch(() => {
@@ -234,6 +282,7 @@ class PhoneAudioEngine {
       this.currentAudio.currentTime = 0;
       this.currentAudio = null;
     }
+    this.currentMediaGain = null;
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }

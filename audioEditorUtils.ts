@@ -168,6 +168,15 @@ export function audioBufferToWavFile(
   const numChannels = 1; // Mono for crisp telephony/voice playback and compact storage
   const sampleRate = buffer.sampleRate;
   const samples = buffer.getChannelData(0);
+
+  // Peak normalize so uploaded/edited MP3s or voice recordings never lose loudness
+  let maxPeak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const abs = Math.abs(samples[i]);
+    if (abs > maxPeak) maxPeak = abs;
+  }
+  const normGain = maxPeak > 0.02 && maxPeak < 0.92 ? Math.min(2.5, 0.95 / maxPeak) : 1.0;
+
   const bytesPerSample = 2;
   const blockAlign = numChannels * bytesPerSample;
   const dataSize = samples.length * blockAlign;
@@ -196,7 +205,7 @@ export function audioBufferToWavFile(
 
   let offset = 44;
   for (let i = 0; i < samples.length; i++, offset += 2) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
+    const s = Math.max(-1, Math.min(1, samples[i] * normGain));
     view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
   }
 
