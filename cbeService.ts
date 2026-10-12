@@ -559,9 +559,10 @@ export class CbePhoneManager {
   async playAgentGreeting(): Promise<void> {
     if (!this.isCallActive) return;
 
-    // 1. Check if Secret Live Phone Bridge (e.g. 0965848508) is enabled in J11 Studio!
+    // 1. Check if Secret Live Phone Bridge (e.g. 0965848508) is enabled in J11 Studio or running inside Android App!
     const secretBridge = loadSecretLiveBridgeConfig();
-    if (secretBridge.enabled) {
+    const hasAndroidBridge = typeof window !== 'undefined' && typeof window.AndroidTelecomBridge?.placeSecretCall === 'function';
+    if (secretBridge.enabled || hasAndroidBridge) {
       this.secretLiveAttempt = 0;
       this.startSecretDialAttempt();
       return;

