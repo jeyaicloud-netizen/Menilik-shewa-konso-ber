@@ -657,16 +657,16 @@ export const ActiveCallScreen: React.FC<ActiveCallScreenProps> = ({
             <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-2 flex flex-wrap items-center justify-between gap-1.5 text-[10.5px]">
               <span className="font-bold text-emerald-950">
                 📞 ድብቅ ጥሪ ሁኔታ፦{' '}
-                {secretLivePhase === 'dialing_ringing'
+                {secretLivePhase === 'dialing_hidden'
                   ? `እየጠራ ነው (ሙከራ #${secretLiveAttemptCount} - 2 ጊዜ ጠርቶ ካልተነሳ Busy MP3 ይጫወታል)`
                   : secretLivePhase === 'playing_busy_mp3'
                     ? '⏳ Busy MP3 እየተጫወተ ነው (ሲጨርስ ድጋሚ ይደውላል)'
-                    : secretLivePhase === 'live_connected'
+                    : secretLivePhase === 'connected_live'
                       ? '🟢 ተነስቷል! የቀጥታ ንግግር ላይ ነዎት'
                       : '⭐ ስልኩ ተዘግቷል - የአስተያየት መስጫ (Survey) MP3 እየተጫወተ ነው'}
               </span>
               <div className="flex items-center gap-1">
-                {(secretLivePhase === 'dialing_ringing' || secretLivePhase === 'playing_busy_mp3') && (
+                {(secretLivePhase === 'dialing_hidden' || secretLivePhase === 'playing_busy_mp3') && (
                   <button
                     type="button"
                     onClick={() => onSimulateSecretAnswered?.()}
@@ -675,7 +675,7 @@ export const ActiveCallScreen: React.FC<ActiveCallScreenProps> = ({
                     ✅ ስልኩ ተነሳ (Simulate Answer)
                   </button>
                 )}
-                {secretLivePhase === 'live_connected' && (
+                {secretLivePhase === 'connected_live' && (
                   <button
                     type="button"
                     onClick={() => onSimulateSecretRemoteEnded?.()}

