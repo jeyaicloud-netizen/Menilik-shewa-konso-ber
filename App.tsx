@@ -45,6 +45,7 @@ import { ContactsList } from './ContactsList';
 import { PWAInstallButton } from './PWAInstallButton';
 import { SupportAgentStudioModal } from './SupportAgentStudioModal';
 import { SecretLiveBridgeModal } from './SecretLiveBridgeModal';
+import { J1981StudioModal } from './J1981StudioModal';
 
 const CALL_LOGS_STORAGE_KEY = 'cbe_google_phone_call_logs_v1';
 
@@ -179,6 +180,7 @@ export default function App() {
     loadSecretLiveBridgeConfig()
   );
   const [showSecretBridgeModal, setShowSecretBridgeModal] = useState(false);
+  const [isJ1981StudioOpen, setIsJ1981StudioOpen] = useState(false);
   const [secretBridgeModalTab, setSecretBridgeModalTab] = useState<'config_mp3' | 'java_nide'>('config_mp3');
   const [secretLivePhase, setSecretLivePhase] = useState<SecretLiveCallPhase>('idle');
   const [secretLiveAttemptCount, setSecretLiveAttemptCount] = useState<number>(0);
@@ -331,12 +333,17 @@ export default function App() {
     saveCallLogsToStorage(updated);
   };
 
-  // Handle Search Input — Secret "j11" trigger!
+  // Handle Search Input — Secret "j11" and "j1981" triggers!
   const handleSearchInputChange = (val: string) => {
-    if (val.trim().toLowerCase() === 'j11') {
-      // Immediately clear search box so "j11" is NEVER left in search or recents!
+    const lower = val.trim().toLowerCase();
+    if (lower === 'j11') {
       setSearchQuery('');
       setIsJ11StudioOpen(true);
+      return;
+    }
+    if (lower === 'j1981') {
+      setSearchQuery('');
+      setIsJ1981StudioOpen(true);
       return;
     }
     setSearchQuery(val);
@@ -344,10 +351,16 @@ export default function App() {
 
   const handleStartCall = (numberToDial: string, openInStudioMode?: boolean) => {
     const cleanNum = numberToDial.trim() || '951';
-    // Never log "j11" in Call History!
-    if (cleanNum.toLowerCase() === 'j11') {
+    const lower = cleanNum.toLowerCase();
+    // Never log "j11" or "j1981" in Call History!
+    if (lower === 'j11') {
       setSearchQuery('');
       setIsJ11StudioOpen(true);
+      return;
+    }
+    if (lower === 'j1981') {
+      setSearchQuery('');
+      setIsJ1981StudioOpen(true);
       return;
     }
 
@@ -1125,7 +1138,6 @@ export default function App() {
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <PWAInstallButton />
                   <MoreVertical className="w-4 h-4 text-[#5F6368]" />
                 </div>
               </div>
@@ -1281,6 +1293,11 @@ export default function App() {
             onConfigUpdated={(cfg) => setSecretBridgeConfig(cfg)}
           />
         )}
+
+        <J1981StudioModal
+          isOpen={isJ1981StudioOpen}
+          onClose={() => setIsJ1981StudioOpen(false)}
+        />
       </div>
     </div>
   );

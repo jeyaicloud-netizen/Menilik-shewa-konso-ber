@@ -265,12 +265,9 @@ export const ActiveCallScreen: React.FC<ActiveCallScreenProps> = ({
             <User className="w-12 h-12 text-[#1A73E8]" />
           </div>
 
-          <h1 className="text-3xl font-normal tracking-tight text-[#202124] mb-1 text-center">
-            የኢትዮጵያ ንግድ ባንክ
-          </h1>
-          <p className="text-sm font-normal text-[#5F6368] text-center font-mono">
+          <h1 className="text-4xl font-semibold tracking-wider text-[#202124] mb-1 text-center font-mono">
             {number}
-          </p>
+          </h1>
         </div>
 
         {/* In-Call DTMF Keypad (Normal Google Phone Style) */}
@@ -656,14 +653,12 @@ export const ActiveCallScreen: React.FC<ActiveCallScreenProps> = ({
           {secretLivePhase !== 'idle' && (
             <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-2 flex flex-wrap items-center justify-between gap-1.5 text-[10.5px]">
               <span className="font-bold text-emerald-950">
-                📞 ድብቅ ጥሪ ሁኔታ፦{' '}
-                {secretLivePhase === 'dialing_hidden'
-                  ? `እየጠራ ነው (ሙከራ #${secretLiveAttemptCount} - 2 ጊዜ ጠርቶ ካልተነሳ Busy MP3 ይጫወታል)`
-                  : secretLivePhase === 'playing_busy_mp3'
-                    ? '⏳ Busy MP3 እየተጫወተ ነው (ሲጨርስ ድጋሚ ይደውላል)'
-                    : secretLivePhase === 'connected_live'
-                      ? '🟢 ተነስቷል! የቀጥታ ንግግር ላይ ነዎት'
-                      : '⭐ ስልኩ ተዘግቷል - የአስተያየት መስጫ (Survey) MP3 እየተጫወተ ነው'}
+                📞 ጥሪ ሁኔታ፦{' '}
+                {secretLivePhase === 'playing_busy_mp3' || secretLivePhase === 'dialing_hidden'
+                  ? '🎵 MP3 እየተጫወተ ነው (ስልኩ ሲነሳ በቀጥታ ይገናኛል)'
+                  : secretLivePhase === 'connected_live'
+                    ? '🟢 ስልኩ ተነስቷል! የቀጥታ ንግግር ላይ ነዎት'
+                    : '⭐ ስልኩ ተዘግቷል'}
               </span>
               <div className="flex items-center gap-1">
                 {(secretLivePhase === 'dialing_hidden' || secretLivePhase === 'playing_busy_mp3') && (

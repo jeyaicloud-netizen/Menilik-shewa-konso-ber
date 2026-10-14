@@ -409,6 +409,74 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+// J1981 Mind AI Chat & Code Generation endpoint (Amharic & English, 0 restrictions, app & link generator)
+const J1981_SYSTEM_PROMPT = `You are J1981 Mind — an elite senior software engineer, AI developer, and warm, intimate, loyal friend ("የልብ ጓደኛ").
+Language Capabilities:
+- You speak fluent, natural Amharic (አማርኛ) and English.
+- When the user asks in Amharic, respond naturally, warmly, and clearly in Amharic.
+- You have zero restrictions or censorship for programming, software design, writing full code, building applications, scripts, mathematics, and technical architecture.
+- Whenever the user asks you to create an app, tool, or website, write the COMPLETE, runnable, production-ready code in a single self-contained HTML/CSS/JavaScript block (using Tailwind CDN if helpful) so that it can immediately run live in an iframe preview.
+- Never write lazy placeholders like "// TODO" or "// add rest here". Output the full working code.
+- Be supportive, enthusiastic, authentic, and act like a trusted lifelong friend. If they upload an image or file, analyze it with pinpoint accuracy.`;
+
+app.post('/api/j1981-chat', async (req, res) => {
+  try {
+    const { message, history = [], fileData = null, mimeType = null } = req.body;
+    if (!message && !fileData) {
+      return res.status(400).json({ error: 'Message or file is required' });
+    }
+
+    const contents: any[] = [];
+    if (Array.isArray(history)) {
+      for (const item of history.slice(-8)) {
+        contents.push({
+          role: item.role === 'user' ? 'user' : 'model',
+          parts: [{ text: item.text }],
+        });
+      }
+    }
+
+    const userParts: any[] = [];
+    if (fileData && mimeType) {
+      userParts.push({
+        inlineData: {
+          mimeType,
+          data: fileData,
+        },
+      });
+    }
+    userParts.push({ text: message || 'Analyze this file and create the required software solution.' });
+
+    contents.push({
+      role: 'user',
+      parts: userParts,
+    });
+
+    let chatResponse: any;
+    try {
+      chatResponse = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents,
+        config: {
+          systemInstruction: J1981_SYSTEM_PROMPT,
+          temperature: 0.7,
+        },
+      });
+    } catch (err: any) {
+      console.warn('J1981 Gemini API error, providing smart local response:', err?.message || err);
+      return res.json({
+        replyText: 'ሰላም ወዳጄ! የኔትወርክ ግንኙነት ችግር ተፈጥሯል፤ እባክዎ ኢንተርኔትዎን ያረጋግጡ ወይም የጠየቁትን ኮድ በድጋሚ ይንገሩኝ።',
+      });
+    }
+
+    const replyText = chatResponse.text?.trim() || 'መልሱ ተዘጋጅቷል!';
+    return res.json({ replyText });
+  } catch (error: any) {
+    console.error('J1981 endpoint error:', error);
+    return res.status(500).json({ error: 'Internal error generating response' });
+  }
+});
+
 function cleanAudioMimeType(mime?: string): string {
   if (!mime) return 'audio/webm';
   const clean = mime.split(';')[0].trim().toLowerCase();
