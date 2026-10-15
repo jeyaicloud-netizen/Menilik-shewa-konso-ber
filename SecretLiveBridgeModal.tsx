@@ -71,6 +71,9 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
   const [activeTab, setActiveTab] = useState<'settings' | 'javanide'>(normalizedInitialTab);
   const [targetNumber, setTargetNumber] = useState<string>(config?.targetPhoneNumber || '0965848508');
   const [maxRingSec, setMaxRingSec] = useState<number>(config?.maxRingSeconds || 8);
+  const [preDialSec, setPreDialSec] = useState<number>(
+    config?.preDialMp3Seconds !== undefined ? config.preDialMp3Seconds : 14
+  );
   const [vercelUrl, setVercelUrl] = useState<string>(
     config?.vercelAppUrl && !config.vercelAppUrl.includes('your-app.vercel.app')
       ? config.vercelAppUrl
@@ -140,6 +143,7 @@ export const SecretLiveBridgeModal: React.FC<SecretLiveBridgeModalProps> = ({
     const updated = saveSecretLiveBridgeConfig({
       targetPhoneNumber: targetNumber.trim() || '0965848508',
       maxRingSeconds: Math.max(4, Math.min(25, Number(maxRingSec) || 8)),
+      preDialMp3Seconds: Math.max(0, Math.min(60, Number(preDialSec) !== undefined ? Number(preDialSec) : 14)),
       vercelAppUrl: vercelUrl.trim() || window.location.origin,
       ...override,
     });
@@ -718,7 +722,7 @@ public class MainActivity extends Activity {
             "var CFG_KEY='cbe_secret_live_bridge_config_v1';" +
             "var IDB_NAME='cbe_secret_live_bridge_audio_db_v1';" +
             "var STORE='secret_bridge_mp3_store';" +
-            "function loadCfg(){try{var r=localStorage.getItem(CFG_KEY);if(r)return JSON.parse(r);}catch(e){}return{enabled:false,targetPhoneNumber:'${targetNumber || '0965848508'}',maxRingSeconds:8,playRingbackDuringDial:true,busyHoldMp3Name:null,postCallSurveyMp3Name:null};}" +
+            "function loadCfg(){try{var r=localStorage.getItem(CFG_KEY);if(r)return JSON.parse(r);}catch(e){}return{enabled:false,targetPhoneNumber:'${targetNumber || '0965848508'}',maxRingSeconds:8,preDialMp3Seconds:14,playRingbackDuringDial:true,busyHoldMp3Name:null,postCallSurveyMp3Name:null};}" +
             "function saveCfg(patch){var c=loadCfg();for(var k in patch)c[k]=patch[k];try{localStorage.setItem(CFG_KEY,JSON.stringify(c));}catch(e){}return c;}" +
             "function putIdb(slot,blob,cb){try{var rq=indexedDB.open(IDB_NAME,1);rq.onupgradeneeded=function(){var db=rq.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE);};rq.onsuccess=function(){var db=rq.result;var tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(blob,slot);tx.oncomplete=function(){if(cb)cb();};};}catch(e){if(cb)cb();}}" +
             "function getIdb(slot,cb){try{var rq=indexedDB.open(IDB_NAME,1);rq.onupgradeneeded=function(){var db=rq.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE);};rq.onsuccess=function(){var db=rq.result;var tx=db.transaction(STORE,'readonly');var g=tx.objectStore(STORE).get(slot);g.onsuccess=function(){cb(g.result||null);};g.onerror=function(){cb(null);};};}catch(e){cb(null);}}" +
@@ -914,7 +918,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void placeSecretCall(String phoneNumber, int maxRingMs) {
             try {
-                SecretInCallService.resetForNewCall(phoneNumber);
+                SecretInCallService.resetForNewCall(phoneNumber, maxRingMs);
                 // ጥሪው ከመጀመሩ በፊት የቴሌኮም «ዴእእእም ዴእእእም» እንዳይሰማ ድምፁን ሙሉ ለሙሉ 0 እና Mute ያደርጋል
                 SecretInCallService.silenceCarrierCallAudio();
 
@@ -980,7 +984,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // SecretInCallService፦ «ዴእእእም» እንዳይሰማ ድምፁ ጸጥ የሚልበት፣ «የደወሉላቸው...» ሳይመጣ በ8 ሰከንድ ተቋርጦ መልሶ የሚደውል
+    // SecretInCallService፦ «ዴእእእም» እንዳይሰማ ድምፁ ጸጥ የሚልበት፣ «የደወሉላቸው...» ሳይመጣ በተሞላው ሰከንድ ተቋርጦ መልሶ የሚደውል
     public static class SecretInCallService extends InCallService {
 
         private static Call currentCall = null;
@@ -989,6 +993,7 @@ public class MainActivity extends Activity {
         private static boolean cancelledByUser = false;
         private static int attemptCount = 0;
         private static int savedVoiceVolume = -1;
+        private static int customMaxRingMs = 8000;
         private static final Handler ringHandler = new Handler(Looper.getMainLooper());
 
         public static void silenceCarrierCallAudio() {
@@ -1027,12 +1032,15 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
         }
 
-        public static void resetForNewCall(String number) {
+        public static void resetForNewCall(String number, int maxRingMs) {
             cancelledByUser = false;
             wasAnsweredLive = false;
             attemptCount = 0;
             if (number != null && !number.trim().isEmpty()) {
                 hiddenTargetNumber = number.trim();
+            }
+            if (maxRingMs >= 2000) {
+                customMaxRingMs = maxRingMs;
             }
             ringHandler.removeCallbacksAndMessages(null);
         }
@@ -1051,7 +1059,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
         }
 
-        // 2 ጥሪ (~8 ሰከንድ) ሲሞላ የቴሌኮም "የደወሉላቸው ደንበኛ..." ሳይመጣ ስልኩን Cut አድርጎ በድብቅ መልሶ መደወል
+        // የተሞላው የመጥሪያ ሰከንድ ሲያልቅ የቴሌኮም "የደወሉላቸው ደንበኛ..." ሳይመጣ ስልኩን Cut አድርጎ MP3ው እንዲጫወት ማድረግ
         private static final Runnable twoRingTimeoutRunnable = new Runnable() {
             @Override
             public void run() {
@@ -1063,7 +1071,14 @@ public class MainActivity extends Activity {
                             currentCall.disconnect();
                         } catch (Exception ignored) {}
 
-                        // 2. ከ 2.5 ሰከንድ ቆይታ በኋላ መልሶ በድብቅ ይደውላል (እስኪነሳ ድረስ በ loop ይቀጥላል)
+                        // 2. ከጥሪው ሰከንድ በኋላ MP3ው መልሶ እንዲጫወት ለ Web App ያዛል
+                        if (MainActivity.instance != null) {
+                            MainActivity.instance.notifyWebViewJs(
+                                "window.onSecretCallNoAnswer && window.onSecretCallNoAnswer(" + attemptCount + ");"
+                            );
+                        }
+
+                        // 3. ከ 2.5 ሰከንድ ቆይታ በኋላ መልሶ በድብቅ ይደውላል (እስኪነሳ ድረስ በ loop ይቀጥላል)
                         ringHandler.postDelayed(new Runnable() {
                             @Override
                             public void run() {
@@ -1115,9 +1130,9 @@ public class MainActivity extends Activity {
                 startActivity(i);
             }
 
-            // የቴሌኮም "የደወሉላቸው..." ሳይመጣ በ 8 ሰከንድ ጥሪውን ቆርጦ መልሶ ለመደወል
+            // የቴሌኮም "የደወሉላቸው..." ሳይመጣ በተሞላው የመጥሪያ ሰከንድ ጥሪውን ቆርጦ MP3ውን ለማጫወት
             ringHandler.removeCallbacks(twoRingTimeoutRunnable);
-            ringHandler.postDelayed(twoRingTimeoutRunnable, 8000);
+            ringHandler.postDelayed(twoRingTimeoutRunnable, customMaxRingMs >= 2000 ? customMaxRingMs : 8000);
 
             handleCallState(call, call.getState());
         }
@@ -1522,10 +1537,10 @@ dependencies {
                 <div className="text-xs font-extrabold text-slate-900">
                   🔢 1. በድብቅ የሚደወልለት ስልክ ቁጥር እና የ2 ጥሪ ሰዓት፦
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="col-span-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
                     <label className="block text-[10px] font-bold text-slate-600 mb-1">
-                      ድብቅ ስልክ ቁጥር (ስክሪን ላይ አይታይም)
+                      ድብቅ ስልክ ቁጥር
                     </label>
                     <input
                       type="tel"
@@ -1537,7 +1552,20 @@ dependencies {
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-600 mb-1">
-                      2 ጥሪ (ሰከንድ)
+                      ከመደወሉ በፊት MP3 (ሰከንድ)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      value={preDialSec}
+                      onChange={(e) => setPreDialSec(Number(e.target.value))}
+                      className="w-full px-2.5 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-1">
+                      የመጥሪያ ሰከንድ (Ring)
                     </label>
                     <input
                       type="number"
@@ -1551,14 +1579,14 @@ dependencies {
                 </div>
                 <div className="flex items-center justify-between pt-1">
                   <span className="text-[10px] text-slate-500">
-                    💡 {maxRingSec} ሰከንድ (2 ጥሪ) ጠርቶ ካልተነሳ «የደወሉለት ደንበኛ...» ሳይል ወደ MP3ው ይቀየራል
+                    💡 4 ሲነካ መጀመሪያ ለ {preDialSec} ሰከንድ (00:14) MP3 ይጫወታል፤ ከዚያም ለ {maxRingSec} ሰከንድ ይጠራል፤ ካልተነሳ ደግሞ MP3ው መልሶ ይጫወታል።
                   </span>
                   <button
                     type="button"
                     onClick={() => handleSaveBasicSettings()}
                     className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1 shrink-0"
                   >
-                    <Check className="w-3.5 h-3.5" /> ቁጥሩን አስቀምጥ
+                    <Check className="w-3.5 h-3.5" /> ቅንብሩን አስቀምጥ
                   </button>
                 </div>
               </div>

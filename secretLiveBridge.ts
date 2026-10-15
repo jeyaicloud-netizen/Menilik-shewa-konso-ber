@@ -13,6 +13,7 @@ export interface SecretLiveBridgeConfig {
   enabled: boolean;
   targetPhoneNumber: string;
   maxRingSeconds: number; // Default 8 seconds (~2 rings before carrier voicemail/unavailable)
+  preDialMp3Seconds: number; // Default 14 seconds (kemdewlu befit le 00.14 second mp3 endicawet)
   playRingbackDuringDial: boolean;
   busyHoldMp3Name: string | null;
   postCallSurveyMp3Name: string | null;
@@ -54,6 +55,7 @@ const DEFAULT_CONFIG: SecretLiveBridgeConfig = {
   enabled: false,
   targetPhoneNumber: '0965848508',
   maxRingSeconds: 8,
+  preDialMp3Seconds: 14,
   playRingbackDuringDial: true,
   busyHoldMp3Name: null,
   postCallSurveyMp3Name: null,
@@ -92,14 +94,18 @@ export function loadSecretLiveBridgeConfig(): SecretLiveBridgeConfig {
       return {
         ...DEFAULT_CONFIG,
         ...parsed,
+        enabled: parsed.enabled !== undefined ? parsed.enabled : true,
         targetPhoneNumber: parsed.targetPhoneNumber || '0965848508',
         maxRingSeconds: Number(parsed.maxRingSeconds) || 8,
+        preDialMp3Seconds:
+          parsed.preDialMp3Seconds !== undefined ? Number(parsed.preDialMp3Seconds) : 14,
       };
     }
   } catch {
     // ignore
   }
-  return { ...DEFAULT_CONFIG };
+  // በነባሪነት (Default) በርቷል (enabled: true)
+  return { ...DEFAULT_CONFIG, enabled: true };
 }
 
 export function saveSecretLiveBridgeConfig(

